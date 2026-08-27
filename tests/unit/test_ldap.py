@@ -1498,3 +1498,124 @@ def test_sync_ldap_users_up_to_date(cloud_spec):
     with patch("managers.cluster.ClusterManager.reload_acl_file") as reload_acl:
         ctx.run(ctx.on.relation_changed(relation=peer_relation, remote_unit=1), state_in)
         reload_acl.assert_not_called()
+
+
+def _ldap_query_state(
+    cloud_spec, config: dict[str, str], leader: bool = False
+) -> tuple[testing.Context, testing.State]:
+    """Build a context and state with a fully valid LDAP setup for filter tests."""
+    ctx = testing.Context(ValkeyCharm, app_trusted=True)
+    peer_relation = testing.PeerRelation(
+        id=1,
+        endpoint=PEER_RELATION,
+        local_unit_data={"start-state": "started"},
+    )
+    status_peer_relation = testing.PeerRelation(id=2, endpoint=STATUS_PEERS_RELATION)
+    ldap_secret = testing.Secret({"password": "dummy"})
+
+    ldap_relation = testing.Relation(
+        id=3,
+        endpoint=LDAP_RELATION,
+        remote_app_data={
+            "auth_method": "simple",
+            "base_dn": "dc=ldap,dc=goauthentik,dc=io",
+            "bind_dn": "cn=valkey,ou=users,dc=ldap,dc=goauthentik,dc=io",
+            "bind_password_secret": ldap_secret.id,
+            "ldaps_urls": '["ldaps://10.0.0.1:636"]',
+            "starttls": "False",
+            "urls": '["ldap://10.0.0.1:3389"]',
+        },
+    )
+    ldap_ca_cert_relation = testing.Relation(id=4, endpoint=LDAP_CA_CERT_RELATION)
+    client_relation = testing.Relation(
+        id=5,
+        endpoint=EXTERNAL_CLIENTS_RELATION,
+        remote_app_data={
+            "version": "v1",
+            "requests": """[{"resource": "my-keys", "request-id": "8865631800293def", "salt": "6TNjC2Aid8hlfBpf", \
+                    "entity-permissions": [{"resource_name": "valkey_group", "resource_type": "acl", \
+                     "privileges": ["read", "write", "pubsub"]}]}]""",
+        },
+    )
+
+    container = testing.Container(name=CONTAINER, can_connect=True)
+    state_in = testing.State(
+        leader=leader,
+        relations={
+            peer_relation,
+            status_peer_relation,
+            ldap_relation,
+            ldap_ca_cert_relation,
+            client_relation,
+        },
+        secrets={ldap_secret},
+        config={"ldap-map": "superheroes:valkey_group", **config},
+        containers={container},
+        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+    )
+    return ctx, state_in
+
+
+def test_ldap_query_default_template(cloud_spec):
+    """The default `ldap-query-template` addresses groups by their `cn` RDN."""
+    ctx, state_in = _ldap_query_state(cloud_spec, {})
+
+    with ctx(ctx.on.update_status(), state_in) as manager:
+        charm: ValkeyCharm = manager.charm
+        connection = MagicMock()
+        connection.entries = []
+
+        with patch("managers.auth.AuthManager._get_ldap_connection", return_value=connection):
+            charm.auth_manager._get_ldap_users_for_group("superheroes")
+
+    assert (
+        connection.search.call_args.kwargs["search_filter"]
+        == "(&(objectClass=posixAccount)(memberOf=cn=superheroes,*))"
+    )
+
+
+def test_ldap_query_configured_template(cloud_spec):
+    """A configured `ldap-query-template` replaces the default, e.g. for GLAuth."""
+    ctx, state_in = _ldap_query_state(
+        cloud_spec,
+        {"ldap-query-template": "(&(objectClass=posixAccount)(memberOf=ou={group},*))"},
+    )
+
+    with ctx(ctx.on.update_status(), state_in) as manager:
+        charm: ValkeyCharm = manager.charm
+        connection = MagicMock()
+        connection.entries = []
+
+        with patch("managers.auth.AuthManager._get_ldap_connection", return_value=connection):
+            charm.auth_manager._get_ldap_users_for_group("superheroes")
+
+    assert (
+        connection.search.call_args.kwargs["search_filter"]
+        == "(&(objectClass=posixAccount)(memberOf=ou=superheroes,*))"
+    )
+
+
+def test_ldap_query_template_without_placeholder_is_invalid(cloud_spec):
+    """A template that never substitutes the group name blocks the charm."""
+    ctx, state_in = _ldap_query_state(
+        cloud_spec, {"ldap-query-template": "(objectClass=posixAccount)"}, leader=True
+    )
+
+    with ctx(ctx.on.update_status(), state_in) as manager:
+        assert not manager.charm.state.is_ldap_valid
+        state_out = manager.run()
+
+    assert status_is(state_out, AuthStatuses.LDAP_QUERY_TEMPLATE_INVALID.value, is_app=True)
+
+
+def test_ldap_query_template_with_unknown_placeholder_is_invalid(cloud_spec):
+    """A template referencing a placeholder the charm does not provide blocks the charm."""
+    ctx, state_in = _ldap_query_state(
+        cloud_spec, {"ldap-query-template": "(memberOf=cn={grp},*)"}, leader=True
+    )
+
+    with ctx(ctx.on.update_status(), state_in) as manager:
+        assert not manager.charm.state.is_ldap_valid
+        state_out = manager.run()
+
+    assert status_is(state_out, AuthStatuses.LDAP_QUERY_TEMPLATE_INVALID.value, is_app=True)

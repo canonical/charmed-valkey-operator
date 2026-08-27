@@ -170,6 +170,8 @@ def test_enable_ldap(juju: jubilant.Juju) -> None:
     valkey_ldap_config = {
         # workaround for `DN` missing in GLAuth search entry attributes
         "ldap-search-dn-attribute": "mail",
+        # GLAuth models groups as organizational units, unlike the `cn` default
+        "ldap-query-template": "(&(objectClass=posixAccount)(memberOf=ou={group},*))",
         # the keys have to match the LDAP groups in ldap_entries.ldif
         "ldap-map": "superheroes:ldap_users_write, normies:ldap_users_read",
     }

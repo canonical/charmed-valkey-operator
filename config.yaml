@@ -53,6 +53,17 @@ options:
       does not return a DN attribute, ensure LDAP users have an email attribute and use `mail`
       instead.
 
+  ldap-query-template:
+    type: string
+    default: "(&(objectClass=posixAccount)(memberOf=cn={group},*))"
+    description: |
+      Config option for LDAP integration, to configure the search filter the charm uses to list
+      the members of an LDAP group named in `ldap-map`. The placeholder `{group}` is replaced with
+      the LDAP group name. The default addresses groups by their `cn` RDN, as the Authentik LDAP
+      outpost does. For directories where groups are organizational units, such as GLAuth, use
+      "(&(objectClass=posixAccount)(memberOf=ou={group},*))". This filter is independent of
+      `ldap-search-filter`, which Valkey itself uses to look up a single user at login.
+
   ldap-map:
     type: string
     description: |

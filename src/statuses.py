@@ -212,6 +212,10 @@ class AuthStatuses(Enum):
         status="blocked", message="LDAP: Missing config for `ldap-map`"
     )
 
+    LDAP_QUERY_TEMPLATE_INVALID = StatusObject(
+        status="blocked", message="LDAP: Invalid config for `ldap-query-template`"
+    )
+
     LDAP_MAP_INTEGRATION_MISSING = StatusObject(
         status="blocked",
         message="LDAP: Missing `entity-permissions`",

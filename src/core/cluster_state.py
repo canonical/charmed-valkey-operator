@@ -30,6 +30,7 @@ from literals import (
     CLIENT_TLS_RELATION_NAME,
     EXTERNAL_CLIENTS_RELATION,
     LDAP_CA_CERT_RELATION,
+    LDAP_GROUP_PLACEHOLDER_PROBE,
     LDAP_RELATION,
     PEER_RELATION,
     S3_RELATION_NAME,
@@ -339,6 +340,10 @@ class ClusterState(ops.Object, StatusesStateProtocol):
             logger.warning("LDAP: Missing config value for `ldap-map`")
             return False
 
+        if not self.is_ldap_query_template_valid:
+            logger.warning("LDAP: Invalid config value for `ldap-query-template`")
+            return False
+
         try:
             ldap_secret = self.get_secret_from_id(self.ldap.bind_password_secret)
         except (ops.ModelError, ops.SecretNotFoundError, TypeError) as e:
@@ -354,6 +359,20 @@ class ClusterState(ops.Object, StatusesStateProtocol):
             return False
 
         return True
+
+    @property
+    def is_ldap_query_template_valid(self) -> bool:
+        """Validate that `ldap-query-template` substitutes the group name and nothing else."""
+        template = str(self.config.get("ldap-query-template", ""))
+
+        try:
+            rendered = template.format(group=LDAP_GROUP_PLACEHOLDER_PROBE)
+        except (IndexError, KeyError, ValueError) as e:
+            logger.debug("Cannot render `ldap-query-template`: %s", e)
+            return False
+
+        # A template without the placeholder would query the same members for every group
+        return rendered != template
 
     @property
     def is_ldap_permission_config_valid(self) -> bool:
