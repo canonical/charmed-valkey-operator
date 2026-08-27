@@ -104,7 +104,9 @@ def test_build_and_deploy(
     if substrate == Substrate.VM:
         logger.info("Set up cross-model offers")
         juju_k8s_model.offer(app=LDAP_NAME, endpoint="ldap", name="ldap")
-        juju_k8s_model.offer(app=LDAP_NAME, endpoint="send-ca-cert", name="ca")
+        # GLAuth only speaks certificate-transfer v0; take the CA from the provider that issued
+        # GLAuth's own certificate instead
+        juju_k8s_model.offer(app=TLS_NAME, endpoint="send-ca-cert", name="ca")
 
 
 def test_ldap_integration(
@@ -120,7 +122,7 @@ def test_ldap_integration(
         juju.consume(f"{juju_k8s_model_name}.{ca_name}")
     else:
         ldap_name = LDAP_NAME
-        ca_name = LDAP_NAME
+        ca_name = TLS_NAME
 
     juju.integrate(f"{APP_NAME}:ldap", ldap_name)
 

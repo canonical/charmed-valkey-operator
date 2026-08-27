@@ -30,9 +30,6 @@ APP_NAME = METADATA["name"]
 
 
 def test_ldap_new_ca_cert(cloud_spec):
-    ldap_cert = "ldap_certificate"
-    ldap_ca_cert = "ldap_ca_certificate"
-
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -43,12 +40,9 @@ def test_ldap_new_ca_cert(cloud_spec):
     ldap_ca_cert_relation = testing.Relation(
         id=3,
         endpoint=LDAP_CA_CERT_RELATION,
-        remote_units_data={
-            0: {
-                "certificate": ldap_cert,
-                "ca": ldap_ca_cert,
-                "chain": f'["{ldap_cert}", "{ldap_ca_cert}"]',
-            }
+        remote_app_data={
+            "certificates": '["ldap_ca_certificate", "ldap_intermediate_certificate"]',
+            "version": "1",
         },
     )
 
@@ -68,6 +62,10 @@ def test_ldap_new_ca_cert(cloud_spec):
     ):
         ctx.run(ctx.on.relation_changed(relation=ldap_ca_cert_relation), state_in)
         write_ldap_ca.assert_called_once()
+        assert (
+            write_ldap_ca.call_args.kwargs["content"]
+            == "ldap_ca_certificate\nldap_intermediate_certificate"
+        )
         rehash_ca_certs.assert_not_called()
         reload_tls.assert_not_called()
 
@@ -100,9 +98,6 @@ def test_ldap_ca_removed(cloud_spec):
 
 
 def test_ca_available_error_defers(cloud_spec):
-    ldap_cert = "ldap_certificate"
-    ldap_ca_cert = "ldap_ca_certificate"
-
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -113,12 +108,9 @@ def test_ca_available_error_defers(cloud_spec):
     ldap_ca_cert_relation = testing.Relation(
         id=3,
         endpoint=LDAP_CA_CERT_RELATION,
-        remote_units_data={
-            0: {
-                "certificate": ldap_cert,
-                "ca": ldap_ca_cert,
-                "chain": f'["{ldap_cert}", "{ldap_ca_cert}"]',
-            }
+        remote_app_data={
+            "certificates": '["ldap_ca_certificate"]',
+            "version": "1",
         },
     )
     container = testing.Container(name=CONTAINER, can_connect=True)
@@ -135,7 +127,7 @@ def test_ca_available_error_defers(cloud_spec):
         ),
     ):
         state_out = ctx.run(ctx.on.relation_changed(relation=ldap_ca_cert_relation), state_in)
-    assert "certificate_available" in [e.name for e in state_out.deferred]
+    assert "certificate_set_updated" in [e.name for e in state_out.deferred]
 
 
 def test_ca_removed_error_defers(cloud_spec):
@@ -159,7 +151,7 @@ def test_ca_removed_error_defers(cloud_spec):
         side_effect=ValkeyWorkloadCommandError("Pebble down"),
     ):
         state_out = ctx.run(ctx.on.relation_broken(relation=ldap_ca_cert_relation), state_in)
-    assert "certificate_removed" in [e.name for e in state_out.deferred]
+    assert "certificates_removed" in [e.name for e in state_out.deferred]
 
 
 def test_no_ldap_ca_cert_relation(cloud_spec):
