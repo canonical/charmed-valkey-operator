@@ -1619,3 +1619,24 @@ def test_ldap_query_template_with_unknown_placeholder_is_invalid(cloud_spec):
         state_out = manager.run()
 
     assert status_is(state_out, AuthStatuses.LDAP_QUERY_TEMPLATE_INVALID.value, is_app=True)
+
+
+def test_ldap_acl_skips_users_while_ca_cert_missing(cloud_spec):
+    """A CA file that has not landed yet omits LDAP users instead of failing the ACL write.
+
+    `is_ldap_valid` is satisfied by the `ldap-ca-cert` relation existing, but the LDAP connection
+    needs the CA on disk. Raising here would fail `configure_auth` and latch the unit in
+    CONFIGURATION_ERROR; the CA-available event regenerates the ACL once the file arrives.
+    """
+    ctx, state_in = _ldap_query_state(cloud_spec, {})
+
+    with ctx(ctx.on.update_status(), state_in) as manager:
+        charm: ValkeyCharm = manager.charm
+        assert charm.state.is_ldap_valid
+
+        with (
+            patch("charmlibs.pathops.ContainerPath.exists", return_value=False),
+            patch("managers.auth.AuthManager._get_ldap_connection") as get_connection,
+        ):
+            assert charm.auth_manager._get_ldap_user_acl_lines() == ""
+            get_connection.assert_not_called()

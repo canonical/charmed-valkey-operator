@@ -162,6 +162,13 @@ class AuthManager(ManagerStatusProtocol):
         if not self.state.is_ldap_valid:
             return acl_content
 
+        # `is_ldap_valid` is satisfied by the CA relation, but the connection needs the CA on
+        # disk, and the file lands on a later event. Omit the LDAP users rather than fail the
+        # whole ACL write: the CA-available event regenerates them once the file is there.
+        if not self.workload.tls_paths.ldap_ca.exists():
+            logger.warning("LDAP CA certificate not stored yet, omitting LDAP users from the ACL")
+            return acl_content
+
         self.state.unit_server.update({"ldap-sync-failed": False})
 
         # get non-LDAP users to avoid adding duplicate usernames to ACL files
