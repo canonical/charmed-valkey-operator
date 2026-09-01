@@ -28,6 +28,8 @@ from tests.integration.helpers import (
     get_cluster_addresses,
     get_password,
     get_primary_ip,
+    has_leader_settled_since,
+    utc_now,
     wait_for_failover,
 )
 
@@ -186,6 +188,10 @@ def test_failover_topology_update(juju: jubilant.Juju) -> None:
     old_primary_ip = get_primary_ip(juju, APP_NAME)
     logger.info("Initiate failover through Sentinel %s", ip_address)
 
+    # Anchor before the failover: the gate below has to wait for the charm to react to it,
+    # and until the leader is woken it still reports the idle it entered beforehand.
+    failover_requested_at = utc_now()
+
     failover_result = exec_valkey_cli(
         hostname=ip_address,
         username=CharmUsers.SENTINEL_CHARM_ADMIN,
@@ -197,8 +203,12 @@ def test_failover_topology_update(juju: jubilant.Juju) -> None:
     assert failover_result == "OK", "Failover not successful"
 
     wait_for_failover(juju, APP_NAME, old_primary_ip=old_primary_ip, unit_count=NUM_UNITS)
+    # Sentinel has switched, but the client still reaches Valkey through whatever the charm
+    # last published; `topology_changed` is what re-points it, and only the leader handles it.
     juju.wait(
-        lambda status: are_agents_idle(status, APP_NAME, idle_period=60, unit_count=NUM_UNITS),
+        lambda status: has_leader_settled_since(
+            status, APP_NAME, since=failover_requested_at, idle_period=60
+        ),
         timeout=600,
     )
 
