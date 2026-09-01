@@ -193,18 +193,22 @@ def are_agents_idle(
     )
 
 
+def utc_now() -> datetime:
+    """Return the current UTC time, naive, to compare against Juju status timestamps.
+
+    Juju reports timestamps in UTC and they are parsed with `ignoretz`, so the value they
+    are compared against has to be UTC too. `datetime.now()` is local: anywhere east of
+    Greenwich it runs ahead, and every elapsed-time check passes by that offset alone.
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 def _check_apps_idle_period(status: jubilant.Status, *apps: str, idle_period: int) -> bool:
     return all(
-        parse(unit.juju_status.since, ignoretz=True) + timedelta(seconds=idle_period)
-        < datetime.now()
+        parse(unit.juju_status.since, ignoretz=True) + timedelta(seconds=idle_period) < utc_now()
         for app in apps
         for unit in status.get_units(app).values()
     )
-
-
-def utc_now() -> datetime:
-    """Return the current UTC time, naive, to compare against Juju status timestamps."""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def has_leader_settled_since(
