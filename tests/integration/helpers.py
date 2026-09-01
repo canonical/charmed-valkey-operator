@@ -288,8 +288,14 @@ def get_glide_config(
     username: str | None = CharmUsers.VALKEY_ADMIN.value,
     password: str | None = None,
     tls_enabled: bool = False,
+    connection_timeout: int | None = None,
 ) -> GlideClientConfiguration:
-    """Construct a GlideClientConfiguration from Juju model information and secrets."""
+    """Construct a GlideClientConfiguration from Juju model information and secrets.
+
+    `connection_timeout` (milliseconds) overrides Glide's 2s default. Credentials are supplied
+    at client creation, so authentication has to finish inside it -- raise it for a cluster
+    whose LDAP provider answers slowly, or the connection dies mid-authentication.
+    """
     endpoints = endpoints or get_cluster_endpoints(juju, app_name)
     addresses = [
         NodeAddress(host=host, port=TLS_PORT if tls_enabled else CLIENT_PORT) for host in endpoints
@@ -319,7 +325,9 @@ def get_glide_config(
         addresses,
         credentials=credentials,
         use_tls=True if tls_enabled else False,
-        advanced_config=AdvancedGlideClientConfiguration(tls_config=tls_config),
+        advanced_config=AdvancedGlideClientConfiguration(
+            tls_config=tls_config, connection_timeout=connection_timeout
+        ),
     )
     return client_config
 
@@ -563,6 +571,7 @@ def set_key(
     key: str,
     value: str,
     tls_enabled: bool = False,
+    connection_timeout: int | None = None,
 ) -> str:
     """Write a key-value pair to the Valkey cluster.
 
@@ -574,6 +583,7 @@ def set_key(
         key: The key to set.
         value: The value to set.
         tls_enabled: Whether TLS certificates are needed.
+        connection_timeout: Milliseconds to allow for connecting and authenticating.
     """
     glide_config = get_glide_config(
         juju=juju,
@@ -582,6 +592,7 @@ def set_key(
         username=username,
         password=password,
         tls_enabled=tls_enabled,
+        connection_timeout=connection_timeout,
     )
     task = juju.run(
         f"{GLIDE_RUNNER_NAME}/leader",
@@ -600,6 +611,7 @@ def get_key(
     password: str,
     key: str,
     tls_enabled: bool = False,
+    connection_timeout: int | None = None,
 ) -> bytes | None:
     """Read a value from the Valkey cluster by key.
 
@@ -610,6 +622,7 @@ def get_key(
         username: The username for authentication.
         password: The password for authentication.
         tls_enabled: Whether TLS certificates are needed.
+        connection_timeout: Milliseconds to allow for connecting and authenticating.
     """
     glide_config = get_glide_config(
         juju=juju,
@@ -618,6 +631,7 @@ def get_key(
         username=username,
         password=password,
         tls_enabled=tls_enabled,
+        connection_timeout=connection_timeout,
     )
     task = juju.run(
         f"{GLIDE_RUNNER_NAME}/leader",
@@ -742,6 +756,7 @@ def auth_test(
     password: str | None = None,
     tls_enabled: bool = False,
     glide_runner_unit: str = f"{GLIDE_RUNNER_NAME}/leader",
+    connection_timeout: int | None = None,
 ) -> bool:
     """Test authentication to the Valkey cluster by attempting to ping it.
 
@@ -752,6 +767,7 @@ def auth_test(
         password: The password for authentication.
         tls_enabled: Whether TLS certificates are needed.
         glide_runner_unit: The unit name of the glide-runner to execute the command on
+        connection_timeout: Milliseconds to allow for connecting and authenticating.
 
     Returns:
         True if authentication is successful and the cluster responds to a ping, False otherwise.
@@ -763,6 +779,7 @@ def auth_test(
         username=username,
         password=password,
         tls_enabled=tls_enabled,
+        connection_timeout=connection_timeout,
     )
     task = juju.run(
         glide_runner_unit,

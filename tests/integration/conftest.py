@@ -106,7 +106,13 @@ def lxd_controller(lxd_cloud: str, juju: jubilant.Juju, substrate: Substrate):
 @pytest.fixture(scope="module")
 def k8s_cloud(arch: str, lxd_controller: str, juju: jubilant.Juju):
     """Provision a microk8s cloud, if a k8s cloud isn't already present, and return the name."""
-    clouds = json.loads(juju.cli("clouds", "--format", "json", include_model=False))
+    # Ask the controller that will host the model, not the client: the client list also carries
+    # clouds the controller cannot use, such as the built-in `microk8s`, and picking one of those
+    # makes `add-model` fail with "cloud not found".
+    cloud_args = ["clouds", "--format", "json"]
+    if lxd_controller:
+        cloud_args += ["--controller", lxd_controller]
+    clouds = json.loads(juju.cli(*cloud_args, include_model=False))
     for cloud, details in clouds.items():
         if "k8s" == details.get("type"):
             logger.info(f"Identified existing k8s cloud: {cloud}")
