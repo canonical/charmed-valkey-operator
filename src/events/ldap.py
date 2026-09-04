@@ -316,3 +316,20 @@ class LDAPEvents(ops.Object):
             return
 
         self.charm.state.unit_server.update({"ldap_user_epoch": time.time()})
+
+    def _on_update_status(self, _: ops.UpdateStatusEvent) -> None:
+        """Handle update status for LDAP."""
+        if (
+            not self.charm.state.unit_server.is_ldap_enabled
+            or not self.charm.state.is_ldap_valid
+            or self.charm.state.cluster.is_restore_in_progress
+        ):
+            return
+
+        logger.info("Update ACL configuration")
+        try:
+            self.charm.auth_manager.set_acl_file()
+            self.charm.cluster_manager.reload_acl_file()
+        except (ValkeyACLLoadError, ValkeyWorkloadCommandError) as e:
+            logger.error("Failed to update ACL settings: %s", e)
+            return
