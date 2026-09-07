@@ -21,7 +21,7 @@ To use S3-compatible storage for your backups, deploy
 [`s3-integrator`](https://charmhub.io/s3-integrator):
 
 ```shell
-juju deploy s3-integrator --channel 2/edge
+juju deploy s3-integrator --channel 2/stable
 ```
 
 Store the access key and secret key in a
@@ -64,7 +64,7 @@ To use Azure Blob storage for your backups, deploy
 [`azure-storage-integrator`](https://charmhub.io/azure-storage-integrator):
 
 ```shell
-juju deploy azure-storage-integrator --channel 1/edge
+juju deploy azure-storage-integrator --channel 1/stable
 ```
 
 Store the storage-account key in a
@@ -198,4 +198,5 @@ for one of the following messages:
 - **`More than one backup storage integrator related; relate exactly one`**: Both
   `s3-integrator` and `azure-storage-integrator` are related. Remove one of the
   integrations. Charmed Valkey automatically detects and uses the remaining
-  integrator.
+  integrator. If the problem persists, check `juju debug-log` on the leader
+  unit for more details.
