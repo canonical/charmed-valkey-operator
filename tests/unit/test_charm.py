@@ -36,7 +36,7 @@ internal_passwords_secret = testing.Secret(
 )
 
 
-def test_start_primary(cloud_spec):
+def test_start_primary():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     relation = testing.PeerRelation(id=1, endpoint=PEER_RELATION)
     status_peer_relation = testing.PeerRelation(id=2, endpoint=STATUS_PEERS_RELATION)
@@ -44,7 +44,7 @@ def test_start_primary(cloud_spec):
     # happy path
     container = testing.Container(name=CONTAINER, can_connect=True)
     state_in = testing.State(
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
         leader=True,
         relations={relation, status_peer_relation},
         containers={container},
@@ -135,7 +135,7 @@ def test_start_primary(cloud_spec):
     # container not ready
     container = testing.Container(name=CONTAINER, can_connect=False)
     state_in = testing.State(
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
         leader=True,
         relations={relation, status_peer_relation},
         containers={container},
@@ -145,14 +145,14 @@ def test_start_primary(cloud_spec):
     assert status_is(state_out, StartStatuses.SERVICE_NOT_STARTED.value)
 
 
-def test_start_non_primary(cloud_spec):
+def test_start_non_primary():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     relation = testing.PeerRelation(id=1, endpoint=PEER_RELATION)
     status_peer_relation = testing.PeerRelation(id=2, endpoint=STATUS_PEERS_RELATION)
 
     container = testing.Container(name=CONTAINER, can_connect=True)
     state_in = testing.State(
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
         leader=False,
         relations={relation, status_peer_relation},
         containers={container},
@@ -168,7 +168,7 @@ def test_start_non_primary(cloud_spec):
 
         relation = testing.PeerRelation(id=1, endpoint=PEER_RELATION)
         state_in = testing.State(
-            model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+            model=testing.Model(name="my-vm-model", type="lxd"),
             leader=False,
             relations={relation, status_peer_relation},
             secrets={internal_passwords_secret},
@@ -185,7 +185,7 @@ def test_start_non_primary(cloud_spec):
             peers_data={1: {"start-state": "started"}},
         )
         state_in = testing.State(
-            model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+            model=testing.Model(name="my-vm-model", type="lxd"),
             leader=False,
             relations={relation, status_peer_relation},
             secrets={internal_passwords_secret},
@@ -207,7 +207,7 @@ def test_start_non_primary(cloud_spec):
                 peers_data={1: {"start-state": "started"}},
             )
             state_in = testing.State(
-                model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+                model=testing.Model(name="my-vm-model", type="lxd"),
                 leader=False,
                 relations={relation, status_peer_relation},
                 secrets={internal_passwords_secret},
@@ -236,7 +236,7 @@ def test_start_non_primary(cloud_spec):
                 peers_data={1: {"start-state": "started"}},
             )
             state_in = testing.State(
-                model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+                model=testing.Model(name="my-vm-model", type="lxd"),
                 leader=False,
                 relations={relation, status_peer_relation},
                 secrets={internal_passwords_secret},
@@ -265,7 +265,7 @@ def test_start_non_primary(cloud_spec):
                 peers_data={1: {"start-state": "started"}},
             )
             state_in = testing.State(
-                model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+                model=testing.Model(name="my-vm-model", type="lxd"),
                 leader=False,
                 relations={relation, status_peer_relation},
                 secrets={internal_passwords_secret},
@@ -288,7 +288,7 @@ def test_start_non_primary(cloud_spec):
                 peers_data={1: {"start-state": "started"}},
             )
             state_in = testing.State(
-                model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+                model=testing.Model(name="my-vm-model", type="lxd"),
                 leader=False,
                 relations={relation, status_peer_relation},
                 secrets={internal_passwords_secret},
@@ -310,7 +310,7 @@ def test_start_non_primary(cloud_spec):
                 peers_data={1: {"start-state": "started"}},
             )
             state_in = testing.State(
-                model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+                model=testing.Model(name="my-vm-model", type="lxd"),
                 leader=False,
                 relations={relation, status_peer_relation},
                 secrets={internal_passwords_secret},
@@ -327,7 +327,7 @@ def test_start_non_primary(cloud_spec):
             assert state_out.get_relation(1).local_unit_data["start-state"] == "started"
 
 
-def test_update_status_leader_unit(cloud_spec):
+def test_update_status_leader_unit():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     relation = testing.PeerRelation(
         id=1,
@@ -339,7 +339,7 @@ def test_update_status_leader_unit(cloud_spec):
     # happy path
     container = testing.Container(name=CONTAINER, can_connect=True)
     state_in = testing.State(
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
         leader=True,
         relations={relation, status_peer_relation},
         containers={container},
@@ -353,7 +353,7 @@ def test_update_status_leader_unit(cloud_spec):
         assert state_out.unit_status == ActiveStatus()
 
 
-def test_update_status_non_leader_unit(cloud_spec):
+def test_update_status_non_leader_unit():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     relation = testing.PeerRelation(
         id=1, endpoint=PEER_RELATION, local_unit_data={"start-state": "started"}
@@ -362,7 +362,7 @@ def test_update_status_non_leader_unit(cloud_spec):
 
     container = testing.Container(name=CONTAINER, can_connect=True)
     state_in = testing.State(
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
         leader=False,
         relations={relation, status_peer_relation},
         containers={container},
@@ -375,13 +375,13 @@ def test_update_status_non_leader_unit(cloud_spec):
         assert state_out.unit_status == ActiveStatus()
 
 
-def test_internal_user_creation(cloud_spec):
+def test_internal_user_creation():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     relation = testing.PeerRelation(id=1, endpoint=PEER_RELATION)
 
     container = testing.Container(name=CONTAINER, can_connect=True)
     state_in = testing.State(
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
         relations={relation},
         leader=True,
         containers={container},
@@ -393,20 +393,20 @@ def test_internal_user_creation(cloud_spec):
     assert secret_out.latest_content.get(f"{CharmUsers.VALKEY_ADMIN.value}-password")
 
 
-def test_leader_elected_no_peer_relation(cloud_spec):
+def test_leader_elected_no_peer_relation():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
 
     container = testing.Container(name=CONTAINER, can_connect=True)
     state_in = testing.State(
         leader=True,
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
     state_out = ctx.run(ctx.on.leader_elected(), state_in)
     assert "leader_elected" in [e.name for e in state_out.deferred]
 
 
-def test_leader_elected_leader_password_specified(cloud_spec):
+def test_leader_elected_leader_password_specified():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     relation = testing.PeerRelation(id=1, endpoint=PEER_RELATION)
     container = testing.Container(name=CONTAINER, can_connect=True)
@@ -421,7 +421,7 @@ def test_leader_elected_leader_password_specified(cloud_spec):
         containers={container},
         secrets={password_secret},
         config={INTERNAL_USERS_PASSWORD_CONFIG: password_secret.id},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
     with (
         patch("managers.auth.AuthManager.generate_password", return_value="generated-password"),
@@ -437,7 +437,7 @@ def test_leader_elected_leader_password_specified(cloud_spec):
             assert secret_out.latest_content.get(f"{user.value}-password") == "generated-password"
 
 
-def test_leader_elected_leader_password_specified_wrong_secret(cloud_spec):
+def test_leader_elected_leader_password_specified_wrong_secret():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     relation = testing.PeerRelation(id=1, endpoint=PEER_RELATION)
     status_relation = testing.PeerRelation(id=2, endpoint=STATUS_PEERS_RELATION)
@@ -448,14 +448,14 @@ def test_leader_elected_leader_password_specified_wrong_secret(cloud_spec):
         relations={relation, status_relation},
         containers={container},
         config={INTERNAL_USERS_PASSWORD_CONFIG: "secret:1tf1wk0tmfrodp8ofwxn"},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
     with pytest.raises(testing.errors.UncaughtCharmError) as exc_info:
         ctx.run(ctx.on.leader_elected(), state_in)
         assert "SecretNotFoundError" in str(exc_info.value)
 
 
-def test_config_changed_non_leader_unit(cloud_spec):
+def test_config_changed_non_leader_unit():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     relation = testing.PeerRelation(id=1, endpoint=PEER_RELATION)
     container = testing.Container(name=CONTAINER, can_connect=True)
@@ -470,14 +470,14 @@ def test_config_changed_non_leader_unit(cloud_spec):
         containers={container},
         secrets={password_secret},
         config={INTERNAL_USERS_PASSWORD_CONFIG: password_secret.id},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
     with patch("events.base_events.BaseEvents._update_internal_users_password") as mock_update:
         ctx.run(ctx.on.config_changed(), state_in)
         mock_update.assert_not_called()
 
 
-def test_config_changed_leader_unit(cloud_spec):
+def test_config_changed_leader_unit():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     relation = testing.PeerRelation(
         id=1, endpoint=PEER_RELATION, local_unit_data={"start-state": "started"}
@@ -494,7 +494,7 @@ def test_config_changed_leader_unit(cloud_spec):
         containers={container},
         secrets={password_secret},
         config={INTERNAL_USERS_PASSWORD_CONFIG: password_secret.id},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
     with (
         patch("managers.auth.AuthManager.set_acl_file") as mock_set_acl_file,
@@ -518,7 +518,7 @@ def test_config_changed_leader_unit(cloud_spec):
         )
 
 
-def test_config_changed_leader_unit_wrong_username(cloud_spec):
+def test_config_changed_leader_unit_wrong_username():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     relation = testing.PeerRelation(id=1, endpoint=PEER_RELATION)
     status_peer_relation = testing.PeerRelation(id=2, endpoint=STATUS_PEERS_RELATION)
@@ -534,7 +534,7 @@ def test_config_changed_leader_unit_wrong_username(cloud_spec):
         containers={container},
         secrets={password_secret},
         config={INTERNAL_USERS_PASSWORD_CONFIG: password_secret.id},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
     with (
         patch("managers.auth.AuthManager.set_acl_file") as mock_set_acl_file,
@@ -550,7 +550,7 @@ def test_config_changed_leader_unit_wrong_username(cloud_spec):
         mock_set_acl_file.assert_not_called()
 
 
-def test_config_changed_ip_change_no_tls_relation(cloud_spec_vm):
+def test_config_changed_ip_change_no_tls_relation(vm_environment):
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     relation = testing.PeerRelation(
         id=1,
@@ -569,7 +569,7 @@ def test_config_changed_ip_change_no_tls_relation(cloud_spec_vm):
         containers={container},
         secrets={password_secret},
         config={INTERNAL_USERS_PASSWORD_CONFIG: password_secret.id},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec_vm),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
     with (
         patch("managers.config.ConfigManager.configure_services"),
@@ -599,7 +599,7 @@ def test_config_changed_ip_change_no_tls_relation(cloud_spec_vm):
         mock_workload_restart.assert_called_once()
 
 
-def test_change_password_secret_changed_non_leader_unit(cloud_spec):
+def test_change_password_secret_changed_non_leader_unit():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     relation = testing.PeerRelation(
         id=1,
@@ -620,7 +620,7 @@ def test_change_password_secret_changed_non_leader_unit(cloud_spec):
         containers={container},
         secrets={password_secret},
         config={INTERNAL_USERS_PASSWORD_CONFIG: password_secret.id},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
     with (
         patch(
@@ -644,7 +644,7 @@ def test_change_password_secret_changed_non_leader_unit(cloud_spec):
         restart_sentinel.assert_called_once()
 
 
-def test_change_password_secret_changed_non_leader_unit_not_successful(cloud_spec):
+def test_change_password_secret_changed_non_leader_unit_not_successful():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     relation = testing.PeerRelation(
         id=1, endpoint=PEER_RELATION, local_unit_data={"start-state": "started"}
@@ -664,7 +664,7 @@ def test_change_password_secret_changed_non_leader_unit_not_successful(cloud_spe
         containers={container},
         secrets={password_secret},
         config={INTERNAL_USERS_PASSWORD_CONFIG: password_secret.id},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
     with (
         patch(
@@ -694,7 +694,7 @@ def test_change_password_secret_changed_non_leader_unit_not_successful(cloud_spe
         assert ClusterStatuses.PASSWORD_UPDATE_FAILED.value in cluster_statuses
 
 
-def test_change_password_secret_changed_leader_unit(cloud_spec):
+def test_change_password_secret_changed_leader_unit():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     relation = testing.PeerRelation(id=1, endpoint=PEER_RELATION)
     container = testing.Container(name=CONTAINER, can_connect=True)
@@ -710,7 +710,7 @@ def test_change_password_secret_changed_leader_unit(cloud_spec):
         containers={container},
         secrets={password_secret},
         config={INTERNAL_USERS_PASSWORD_CONFIG: password_secret.id},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
     with (
         patch(
@@ -721,7 +721,7 @@ def test_change_password_secret_changed_leader_unit(cloud_spec):
         mock_update_password.assert_called_once_with(password_secret.id)
 
 
-def test_relation_changed_event_leader_setting_starting_member(cloud_spec):
+def test_relation_changed_event_leader_setting_starting_member():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     relation = testing.PeerRelation(
         id=1,
@@ -735,7 +735,7 @@ def test_relation_changed_event_leader_setting_starting_member(cloud_spec):
         leader=True,
         relations={relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
     with (
         patch("managers.tls.TLSManager.will_certificate_expire"),
@@ -745,7 +745,7 @@ def test_relation_changed_event_leader_setting_starting_member(cloud_spec):
         assert state_out.get_relation(1).local_app_data.get("start-member") == "valkey/1"
 
 
-def test_relation_changed_event_leader_clears_starting_member(cloud_spec):
+def test_relation_changed_event_leader_clears_starting_member():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     relation = testing.PeerRelation(
         id=1,
@@ -760,7 +760,7 @@ def test_relation_changed_event_leader_clears_starting_member(cloud_spec):
         leader=True,
         relations={relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
     with (
         patch("managers.tls.TLSManager.will_certificate_expire"),
@@ -770,7 +770,7 @@ def test_relation_changed_event_leader_clears_starting_member(cloud_spec):
         assert state_out.get_relation(1).local_app_data.get("start-member") is None
 
 
-def test_relation_changed_event_leader_leaves_starting_member_as_is(cloud_spec):
+def test_relation_changed_event_leader_leaves_starting_member_as_is():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     relation = testing.PeerRelation(
         id=1,
@@ -790,7 +790,7 @@ def test_relation_changed_event_leader_leaves_starting_member_as_is(cloud_spec):
         leader=True,
         relations={relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
     with (
         patch("managers.tls.TLSManager.will_certificate_expire"),
@@ -800,7 +800,7 @@ def test_relation_changed_event_leader_leaves_starting_member_as_is(cloud_spec):
         assert state_out.get_relation(1).local_app_data.get("start-member") == "valkey/1"
 
 
-def test_relation_changed_event_update_quorum(cloud_spec):
+def test_relation_changed_event_update_quorum():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     relation = testing.PeerRelation(
         id=1,
@@ -815,7 +815,7 @@ def test_relation_changed_event_update_quorum(cloud_spec):
         leader=True,
         relations={relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
     with (
         patch("common.client.SentinelClient.primary", return_value={"quorum": "1"}),
@@ -826,7 +826,7 @@ def test_relation_changed_event_update_quorum(cloud_spec):
         mock_set.assert_called_once_with("valkey-0.valkey-endpoints", PRIMARY_NAME, "quorum", "2")
 
 
-def test_relation_changed_event_do_not_update_quorum(cloud_spec):
+def test_relation_changed_event_do_not_update_quorum():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     relation = testing.PeerRelation(
         id=1,
@@ -844,7 +844,7 @@ def test_relation_changed_event_do_not_update_quorum(cloud_spec):
         leader=True,
         relations={relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
     with (
         patch("common.client.SentinelClient.primary", return_value={"quorum": "2"}),

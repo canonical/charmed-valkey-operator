@@ -74,7 +74,7 @@ def test_valkey_server_is_backup_in_progress_reflects_model_field():
     assert server.is_backup_in_progress is False
 
 
-def test_cluster_state_exposes_s3_relation(cloud_spec):
+def test_cluster_state_exposes_s3_relation():
     from ops import testing
 
     from src.charm import ValkeyCharm
@@ -90,7 +90,7 @@ def test_cluster_state_exposes_s3_relation(cloud_spec):
         remote_app_name="s3-integrator",
     )
     state_in = testing.State(
-        model=testing.Model(name="m", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="m", type="lxd"),
         leader=True,
         relations={peer, status_peer, s3_rel},
         containers={testing.Container(name="valkey", can_connect=True)},
@@ -101,7 +101,7 @@ def test_cluster_state_exposes_s3_relation(cloud_spec):
         assert manager.charm.state.s3_relation.name == S3_RELATION_NAME
 
 
-def test_active_backup_credentials_follows_the_relation(cloud_spec, mocker):
+def test_active_backup_credentials_follows_the_relation(mocker):
     """Credentials are only "active" while the backend they belong to is related.
 
     The leader clears the stored envelope on relation-broken; until it does, the
@@ -133,7 +133,7 @@ def test_active_backup_credentials_follows_the_relation(cloud_spec, mocker):
         remote_app_name="s3-integrator",
     )
     common = {
-        "model": testing.Model(name="m", type="lxd", cloud_spec=cloud_spec),
+        "model": testing.Model(name="m", type="lxd"),
         "leader": True,
         "containers": {testing.Container(name="valkey", can_connect=True)},
     }
@@ -161,7 +161,7 @@ def test_backup_credential_registry_maps_relations_to_databag_fields():
         assert field in PeerAppModel.model_fields
 
 
-def test_backup_relations_and_conflict_follow_the_registry(cloud_spec):
+def test_backup_relations_and_conflict_follow_the_registry():
     """Relation discovery and the conflict check are driven by the registry alone.
 
     Exercised with the two registered backends, so it also pins the mutual
@@ -183,7 +183,7 @@ def test_backup_relations_and_conflict_follow_the_registry(cloud_spec):
     s3_rel = testing.Relation(id=3, endpoint=S3_RELATION_NAME, interface="s3")
     azure_rel = testing.Relation(id=4, endpoint=AZURE_RELATION_NAME, interface="azure_storage")
     common = {
-        "model": testing.Model(name="m", type="lxd", cloud_spec=cloud_spec),
+        "model": testing.Model(name="m", type="lxd"),
         "leader": True,
         "containers": {testing.Container(name="valkey", can_connect=True)},
     }
@@ -1073,7 +1073,7 @@ def test_on_list_backups_action_rejects_invalid_format(mocker):
     charm.backup_manager.list_backups.assert_not_called()
 
 
-def test_storage_detaching_refuses_during_backup(cloud_spec):
+def test_storage_detaching_refuses_during_backup():
     import pytest
     from ops import testing
 
@@ -1093,7 +1093,7 @@ def test_storage_detaching_refuses_during_backup(cloud_spec):
     status_peer = testing.PeerRelation(id=2, endpoint=STATUS_PEERS_RELATION)
     storage = testing.Storage(name=DATA_STORAGE)
     state_in = testing.State(
-        model=testing.Model(name="m", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="m", type="lxd"),
         leader=True,
         relations={peer, status_peer},
         storages={storage},
@@ -1107,7 +1107,7 @@ def test_storage_detaching_refuses_during_backup(cloud_spec):
     assert "ValkeyBackupInProgressError" in str(exc_info.value)
 
 
-def test_charm_constructs_backup_manager_and_events(cloud_spec):
+def test_charm_constructs_backup_manager_and_events():
     from ops import testing
 
     from src.charm import ValkeyCharm
@@ -1117,7 +1117,7 @@ def test_charm_constructs_backup_manager_and_events(cloud_spec):
     peer = testing.PeerRelation(id=1, endpoint=PEER_RELATION)
     status_peer = testing.PeerRelation(id=2, endpoint=STATUS_PEERS_RELATION)
     state_in = testing.State(
-        model=testing.Model(name="m", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="m", type="lxd"),
         leader=True,
         relations={peer, status_peer},
         containers={testing.Container(name="valkey", can_connect=True)},
@@ -1437,7 +1437,7 @@ def test_cluster_azure_credentials_parses_envelope_and_defaults_none(mocker):
     assert cluster.azure_credentials is None
 
 
-def test_credentials_changed_handlers_cover_every_registered_backend(mocker, cloud_spec):
+def test_credentials_changed_handlers_cover_every_registered_backend(mocker):
     """Every registry entry has a changed handler, or its integrator is inert.
 
     ``_reconcile_other_backends`` and the leader_elected recovery observers are
@@ -1450,7 +1450,7 @@ def test_credentials_changed_handlers_cover_every_registered_backend(mocker, clo
 
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     state_in = testing.State(
-        model=testing.Model(name="m", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="m", type="lxd"),
         leader=True,
         relations={
             testing.PeerRelation(id=1, endpoint=PEER_RELATION),

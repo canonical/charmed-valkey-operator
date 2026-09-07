@@ -13,13 +13,13 @@ from src.literals import PEER_RELATION, STATUS_PEERS_RELATION
 CONTAINER = "valkey"
 
 
-def test_install_on_vm(cloud_spec_vm):
-    ctx = testing.Context(ValkeyCharm, app_trusted=True)
+def test_install_on_vm(vm_environment):
+    ctx = testing.Context(ValkeyCharm)
     relation = testing.PeerRelation(id=1, endpoint=PEER_RELATION)
     status_peer_relation = testing.PeerRelation(id=2, endpoint=STATUS_PEERS_RELATION)
 
     state_in = testing.State(
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec_vm),
+        model=testing.Model(name="my-vm-model"),
         leader=True,
         relations={relation, status_peer_relation},
     )
@@ -32,15 +32,14 @@ def test_install_on_vm(cloud_spec_vm):
         workload_install.assert_called_once()
 
 
-def test_install_on_k8s(cloud_spec):
-    ctx = testing.Context(ValkeyCharm, app_trusted=True)
+def test_install_on_k8s():
+    ctx = testing.Context(ValkeyCharm)
     relation = testing.PeerRelation(id=1, endpoint=PEER_RELATION)
     status_peer_relation = testing.PeerRelation(id=2, endpoint=STATUS_PEERS_RELATION)
     container = testing.Container(name=CONTAINER, can_connect=True)
 
     state_in = testing.State(
-        # type has to be set to `lxd`, see https://github.com/canonical/operator/issues/2304
-        model=testing.Model(name="my-k8s-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-k8s-model"),
         leader=True,
         relations={relation, status_peer_relation},
         containers={container},
@@ -53,13 +52,13 @@ def test_install_on_k8s(cloud_spec):
         workload_install.assert_not_called()
 
 
-def test_install_failure(cloud_spec_vm):
-    ctx = testing.Context(ValkeyCharm, app_trusted=True)
+def test_install_failure(vm_environment):
+    ctx = testing.Context(ValkeyCharm)
     relation = testing.PeerRelation(id=1, endpoint=PEER_RELATION)
     status_peer_relation = testing.PeerRelation(id=2, endpoint=STATUS_PEERS_RELATION)
 
     state_in = testing.State(
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec_vm),
+        model=testing.Model(name="my-vm-model"),
         leader=True,
         relations={relation, status_peer_relation},
     )
