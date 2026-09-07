@@ -1,0 +1,7 @@
+summary: test_azure_backup.py
+environment:
+  TEST_MODULE: test_azure_backup.py
+execute: |
+  tox run -e integration -- "tests/integration/backup/$TEST_MODULE" --substrate k8s --alluredir="$SPREAD_TASK/allure-results"
+artifacts:
+  - allure-results

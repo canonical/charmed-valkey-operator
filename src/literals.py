@@ -38,8 +38,26 @@ LDAP_RELATION = "ldap"
 LDAP_GROUP_PLACEHOLDER_PROBE = "group-name-probe"
 EXTERNAL_CLIENTS_RELATION = "valkey-client"
 S3_RELATION_NAME = "s3-credentials"
-BACKUP_CREDENTIAL_FIELDS: dict[str, str] = {S3_RELATION_NAME: "s3_credentials"}
+AZURE_RELATION_NAME = "azure-credentials"
+# azure-storage-integrator connection-protocol values that designate an https/http
+# Blob endpoint. abfs/abfss designate ADLS-Gen2 (*.dfs.*), served by the datalake
+# SDK rather than the Blob SDK, so they are rejected up front.
+AZURE_HTTPS_PROTOCOLS = frozenset({"https", "wasbs"})
+AZURE_HTTP_PROTOCOLS = frozenset({"http", "wasb"})
+AZURE_REJECTED_PROTOCOLS = frozenset({"abfs", "abfss"})
+# Every backup backend: its integrator relation -> the app databag field its
+# validated credentials envelope is stored under. Relation discovery, the
+# mutual-exclusion check, credential selection and the action guards all read
+# this, so a new backend is one entry here plus its model, backend and wiring.
+BACKUP_CREDENTIAL_FIELDS: dict[str, str] = {
+    S3_RELATION_NAME: "s3_credentials",
+    AZURE_RELATION_NAME: "azure_credentials",
+}
 BACKUP_ID_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+# Structured code create-backup reports when an object already occupies the
+# generated id. Ids have one-second resolution, so two units starting a backup
+# in the same second would otherwise replace each other's snapshot.
+BACKUP_EXISTS_CODE = "BackupAlreadyExists"
 BACKUP_CA_FILENAME = "s3_ca_chain.pem"
 PRE_RESTORE_SUFFIX = ".pre-restore"
 # Normal down-after (rendered by ConfigManager, reasserted by resume_failover);

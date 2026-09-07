@@ -23,6 +23,7 @@ from common.exceptions import StorageBackendError, ValkeyBackupError, ValkeyRest
 from common.storage_backend import StorageBackend, build_backend
 from literals import (
     BACKUP_CA_FILENAME,
+    BACKUP_EXISTS_CODE,
     BACKUP_ID_FORMAT,
     PRE_RESTORE_SUFFIX,
     CharmUsers,
@@ -205,6 +206,19 @@ class BackupManager(ManagerStatusProtocol):
             raise ValkeyBackupError(str(e), safe_code=e.safe_code) from e
         started = datetime.now(timezone.utc)
         backup_id = started.strftime(BACKUP_ID_FORMAT)
+        # A stored backup is never replaced. Azure refuses the write itself
+        # (upload_blob overwrite=False), but boto3's managed uploader takes no
+        # If-None-Match, so the guard both backends share has to live here.
+        try:
+            stored = backend.list_object_ids()
+        except StorageBackendError as e:
+            raise ValkeyBackupError(str(e), safe_code=e.safe_code) from e
+        if backup_id in stored:
+            logger.warning("backup.rejected backup_id=%s reason=already-exists", backup_id)
+            raise ValkeyBackupError(
+                f"An object already exists for backup-id {backup_id}",
+                safe_code=BACKUP_EXISTS_CODE,
+            )
         # Structured audit trail for forensics; destination logged, creds never.
         # No unit= -- Juju already prefixes every log line with the emitting unit.
         logger.info("backup.started backup_id=%s destination=%s", backup_id, backend.location)
@@ -240,6 +254,13 @@ class BackupManager(ManagerStatusProtocol):
             proc.kill()
             logger.warning("backup.failed backup_id=%s", backup_id)
             raise ValkeyBackupError(str(e), safe_code=e.safe_code) from e
+        except Exception:
+            # Nothing should get past the backends' translation, but an SDK that
+            # grows a new exception type must not leave valkey-cli blocked on a
+            # pipe nobody drains. The producer dies with the backup either way.
+            proc.kill()
+            logger.warning("backup.failed backup_id=%s", backup_id)
+            raise
         else:
             elapsed = (datetime.now(timezone.utc) - started).total_seconds()
             logger.info(

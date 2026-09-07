@@ -151,45 +151,37 @@ def test_active_backup_credentials_follows_the_relation(cloud_spec, mocker):
 def test_backup_credential_registry_maps_relations_to_databag_fields():
     """Adding a backend is one registry entry: its relation and where creds land."""
     from src.core.models import PeerAppModel
-    from src.literals import BACKUP_CREDENTIAL_FIELDS, S3_RELATION_NAME
+    from src.literals import AZURE_RELATION_NAME, BACKUP_CREDENTIAL_FIELDS, S3_RELATION_NAME
 
     assert BACKUP_CREDENTIAL_FIELDS[S3_RELATION_NAME] == "s3_credentials"
+    assert BACKUP_CREDENTIAL_FIELDS[AZURE_RELATION_NAME] == "azure_credentials"
     # Every registered field must exist on the app databag model, or the leader
     # would silently write credentials nothing reads back.
     for field in BACKUP_CREDENTIAL_FIELDS.values():
         assert field in PeerAppModel.model_fields
 
 
-def test_backup_relations_and_conflict_follow_the_registry(cloud_spec, mocker):
+def test_backup_relations_and_conflict_follow_the_registry(cloud_spec):
     """Relation discovery and the conflict check are driven by the registry alone.
 
-    Exercised with a second entry patched in (there is only one backend today),
-    which is what a future backend's entry will look like.
+    Exercised with the two registered backends, so it also pins the mutual
+    exclusion the charm enforces: relate exactly one storage integrator.
     """
     from ops import testing
 
     from src.charm import ValkeyCharm
     from src.literals import (
-        CLIENT_TLS_RELATION_NAME,
+        AZURE_RELATION_NAME,
         PEER_RELATION,
         S3_RELATION_NAME,
         STATUS_PEERS_RELATION,
-    )
-
-    # CLIENT_TLS stands in for a second backup integrator until one exists.
-    mocker.patch.dict(
-        "core.cluster_state.BACKUP_CREDENTIAL_FIELDS",
-        {S3_RELATION_NAME: "s3_credentials", CLIENT_TLS_RELATION_NAME: "s3_credentials"},
-        clear=True,
     )
 
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer = testing.PeerRelation(id=1, endpoint=PEER_RELATION)
     status_peer = testing.PeerRelation(id=2, endpoint=STATUS_PEERS_RELATION)
     s3_rel = testing.Relation(id=3, endpoint=S3_RELATION_NAME, interface="s3")
-    second = testing.Relation(
-        id=4, endpoint=CLIENT_TLS_RELATION_NAME, interface="tls-certificates"
-    )
+    azure_rel = testing.Relation(id=4, endpoint=AZURE_RELATION_NAME, interface="azure_storage")
     common = {
         "model": testing.Model(name="m", type="lxd", cloud_spec=cloud_spec),
         "leader": True,
@@ -201,7 +193,12 @@ def test_backup_relations_and_conflict_follow_the_registry(cloud_spec, mocker):
         assert len(manager.charm.state.backup_relations) == 1
         assert manager.charm.state.backup_backends_conflict is False
 
-    both = testing.State(relations={peer, status_peer, s3_rel, second}, **common)
+    other = testing.State(relations={peer, status_peer, azure_rel}, **common)
+    with ctx(ctx.on.update_status(), other) as manager:
+        assert len(manager.charm.state.backup_relations) == 1
+        assert manager.charm.state.backup_backends_conflict is False
+
+    both = testing.State(relations={peer, status_peer, s3_rel, azure_rel}, **common)
     with ctx(ctx.on.update_status(), both) as manager:
         assert len(manager.charm.state.backup_relations) == 2
         assert manager.charm.state.backup_backends_conflict is True
@@ -536,6 +533,52 @@ def test_create_backup_deletes_object_and_raises_when_cli_fails(mocker):
     backend.delete.assert_called_once_with("2026-05-13T10:00:00Z")
     last_update = state.unit_server.update.call_args_list[-1]
     assert last_update.args[0] == {"backup_id": ""}
+
+
+def test_create_backup_refuses_to_overwrite_an_existing_backup(mocker):
+    """An object already under this id is never replaced -- on any backend."""
+    import pytest
+
+    from common.exceptions import ValkeyBackupError
+    from literals import BACKUP_EXISTS_CODE
+    from src.managers.backup import BackupManager
+
+    state = _make_state(mocker)
+    workload = mocker.MagicMock()
+    backend = _fake_backend(mocker)
+    backend.list_object_ids.return_value = ["2026-05-13T10:00:00Z"]
+    fixed_now = mocker.patch("src.managers.backup.datetime")
+    fixed_now.now.return_value.strftime.return_value = "2026-05-13T10:00:00Z"
+
+    with pytest.raises(ValkeyBackupError) as excinfo:
+        BackupManager(state=state, workload=workload).create_backup()
+
+    assert excinfo.value.safe_code == BACKUP_EXISTS_CODE
+    # Nothing ran: no producer, no upload, and the stored backup is untouched.
+    workload.exec_stream.assert_not_called()
+    backend.upload.assert_not_called()
+    backend.delete.assert_not_called()
+    state.unit_server.update.assert_not_called()
+
+
+def test_create_backup_wraps_a_failing_existence_probe(mocker):
+    """A backend error on the pre-flight listing fails the action, safe code intact."""
+    import pytest
+
+    from common.exceptions import StorageBackendError, ValkeyBackupError
+    from src.managers.backup import BackupManager
+
+    state = _make_state(mocker)
+    workload = mocker.MagicMock()
+    backend = _fake_backend(mocker)
+    backend.list_object_ids.side_effect = StorageBackendError("nope", safe_code="AccessDenied")
+
+    with pytest.raises(ValkeyBackupError) as excinfo:
+        BackupManager(state=state, workload=workload).create_backup()
+
+    assert excinfo.value.safe_code == "AccessDenied"
+    workload.exec_stream.assert_not_called()
+    state.unit_server.update.assert_not_called()
 
 
 def test_create_backup_refuses_to_run_without_credentials(mocker):
@@ -1256,5 +1299,393 @@ def test_create_backup_kills_producer_on_upload_failure(mocker):
     assert excinfo.value.safe_code == "NoSuchBucket"
     proc.kill.assert_called_once()
     backend.delete.assert_not_called()
+    # The lock is still released on the way out.
+    assert state.unit_server.update.call_args_list[-1].args[0] == {"backup_id": ""}
+
+
+# ── Azure Blob backend ──────────────────────────────────────────────────
+
+
+def test_metadata_declares_azure_relation():
+    """The Azure integrator relation is declared and mutually exclusive-friendly."""
+    import pathlib
+
+    import yaml
+
+    meta = yaml.safe_load(pathlib.Path("metadata.yaml").read_text())
+    az = meta["requires"]["azure-credentials"]
+    assert az["interface"] == "azure_storage"
+    assert az["limit"] == 1
+    assert az["optional"] is True
+
+
+def test_azure_parameters_valid_and_normalised():
+    """Trims whitespace, strips the separators that would corrupt blob keys."""
+    from src.core.models import AzureStorageParameters
+
+    p = AzureStorageParameters.model_validate(
+        {
+            "container": " c ",
+            "storage-account": "acct",
+            "secret-key": " KEY ",
+            "connection-protocol": "https",
+            "endpoint": "https://acct.blob.core.windows.net/",
+            "path": "/valkey/",
+        }
+    )
+    assert p.container == "c"
+    assert p.storage_account == "acct"
+    assert p.secret_key == "KEY"
+    assert p.path == "valkey"
+    assert p.endpoint == "https://acct.blob.core.windows.net"
+    assert p.resource_group is None
+
+
+def test_azure_parameters_lowercases_the_connection_protocol():
+    """The protocol is matched against the scheme sets, which are lowercase.
+
+    An integrator sending "HTTPS" must not fall through to the http branch of
+    the account URL.
+    """
+    from src.core.models import AzureStorageParameters
+
+    p = AzureStorageParameters.model_validate(
+        {
+            "container": "c",
+            "storage-account": "a",
+            "secret-key": "k",
+            "connection-protocol": "HTTPS",
+            "path": "valkey",
+        }
+    )
+    assert p.connection_protocol == "https"
+
+
+def test_azure_parameters_rejects_empty_required():
+    """An empty path would make list_backups enumerate the whole container."""
+    import pytest
+    from pydantic import ValidationError
+
+    from src.core.models import AzureStorageParameters
+
+    base = {
+        "container": "c",
+        "storage-account": "a",
+        "secret-key": "k",
+        "connection-protocol": "https",
+        "path": "valkey",
+    }
+    for field in ("container", "storage-account", "secret-key", "connection-protocol", "path"):
+        with pytest.raises(ValidationError):
+            AzureStorageParameters.model_validate({**base, field: ""})
+
+
+def test_azure_parameters_rejects_adls_protocols():
+    """abfs/abfss are ADLS-Gen2, served by the datalake SDK -- not BlobServiceClient."""
+    import pytest
+    from pydantic import ValidationError
+
+    from src.core.models import AzureStorageParameters
+
+    for proto in ("abfs", "abfss", "ABFSS"):
+        with pytest.raises(ValidationError):
+            AzureStorageParameters.model_validate(
+                {
+                    "container": "c",
+                    "storage-account": "a",
+                    "secret-key": "k",
+                    "connection-protocol": proto,
+                    "path": "valkey",
+                }
+            )
+
+
+def test_peer_app_model_has_azure_credentials_field():
+    from src.core.models import PeerAppModel
+
+    fields = PeerAppModel.model_fields
+    assert "azure_credentials" in fields
+    assert fields["azure_credentials"].default is None
+
+
+def test_cluster_azure_credentials_parses_envelope_and_defaults_none(mocker):
+    """The stored envelope parses back to AzureStorageParameters; unset reads as None."""
+    from src.core.models import AzureStorageParameters, ValkeyCluster
+
+    cluster = ValkeyCluster.__new__(ValkeyCluster)
+    cluster.model = mocker.MagicMock()
+
+    params = AzureStorageParameters.model_validate(
+        {
+            "container": "c",
+            "storage-account": "a",
+            "secret-key": "k",
+            "connection-protocol": "https",
+            "path": "valkey",
+        }
+    )
+    cluster.model.azure_credentials = params.model_dump_json(by_alias=True)
+    got = cluster.azure_credentials
+    assert isinstance(got, AzureStorageParameters)
+    assert got.container == "c"
+    assert got.secret_key == "k"
+
+    cluster.model.azure_credentials = None
+    assert cluster.azure_credentials is None
+
+    cluster.model = None
+    assert cluster.azure_credentials is None
+
+
+def test_credentials_changed_handlers_cover_every_registered_backend(mocker, cloud_spec):
+    """Every registry entry has a changed handler, or its integrator is inert.
+
+    ``_reconcile_other_backends`` and the leader_elected recovery observers are
+    both generated from this table, so a missing entry silently loses a backend.
+    """
+    from ops import testing
+
+    from src.charm import ValkeyCharm
+    from src.literals import BACKUP_CREDENTIAL_FIELDS, PEER_RELATION, STATUS_PEERS_RELATION
+
+    ctx = testing.Context(ValkeyCharm, app_trusted=True)
+    state_in = testing.State(
+        model=testing.Model(name="m", type="lxd", cloud_spec=cloud_spec),
+        leader=True,
+        relations={
+            testing.PeerRelation(id=1, endpoint=PEER_RELATION),
+            testing.PeerRelation(id=2, endpoint=STATUS_PEERS_RELATION),
+        },
+        containers={testing.Container(name="valkey", can_connect=True)},
+    )
+    with ctx(ctx.on.update_status(), state_in) as manager:
+        handlers = manager.charm.backup_events._credentials_changed_handlers
+    assert set(handlers) == set(BACKUP_CREDENTIAL_FIELDS)
+
+
+def test_on_azure_credentials_changed_leader_writes_databag(mocker):
+    """The Azure handler delegates the leader/conflict/validate/store half."""
+    import json
+
+    from src.events.backup import BackupEvents
+
+    charm = mocker.MagicMock()
+    charm.unit.is_leader.return_value = True
+    charm.state.peer_relation = mocker.MagicMock()
+    charm.state.backup_backends_conflict = False
+    charm.state.is_backup_in_progress_any = False
+    charm.state.cluster.is_restore_in_progress = False
+
+    evt = BackupEvents.__new__(BackupEvents)
+    evt.charm = charm
+    evt.azure_requirer = mocker.MagicMock()
+    evt.azure_requirer.get_storage_connection_info.return_value = {
+        "container": " c ",
+        "storage-account": "acct",
+        "secret-key": "SK",
+        "connection-protocol": "https",
+        "path": "/valkey/",
+    }
+
+    evt._on_azure_credentials_changed(mocker.MagicMock())
+
+    charm.backup_manager.ensure_container.assert_called_once()
+    args, _ = charm.state.cluster.update.call_args
+    creds = json.loads(args[0]["azure_credentials"])
+    assert creds["container"] == "c"
+    assert creds["path"] == "valkey"
+    assert creds["storage-account"] == "acct"
+
+
+def test_on_azure_credentials_changed_without_info_is_a_noop(mocker):
+    """Fired on leader_elected with no Azure relation: nothing to store."""
+    from src.events.backup import BackupEvents
+
+    charm = mocker.MagicMock()
+    evt = BackupEvents.__new__(BackupEvents)
+    evt.charm = charm
+    evt.azure_requirer = mocker.MagicMock()
+    evt.azure_requirer.get_storage_connection_info.return_value = {}
+
+    evt._on_azure_credentials_changed(mocker.MagicMock())
+
+    charm.state.cluster.update.assert_not_called()
+    charm.backup_manager.ensure_container.assert_not_called()
+
+
+def test_on_azure_credentials_changed_never_touches_the_s3_ca(mocker):
+    """The endpoint CA is an S3-only concept; Azure must not clobber the file."""
+    from src.events.backup import BackupEvents
+
+    charm = mocker.MagicMock()
+    charm.unit.is_leader.return_value = False
+
+    evt = BackupEvents.__new__(BackupEvents)
+    evt.charm = charm
+    evt.azure_requirer = mocker.MagicMock()
+    evt.azure_requirer.get_storage_connection_info.return_value = {
+        "container": "c",
+        "storage-account": "acct",
+        "secret-key": "SK",
+        "connection-protocol": "https",
+        "path": "valkey",
+    }
+
+    evt._on_azure_credentials_changed(mocker.MagicMock())
+
+    charm.backup_manager.store_tls_ca_chain.assert_not_called()
+    charm.backup_manager.remove_tls_ca_chain.assert_not_called()
+
+
+def test_on_azure_credentials_gone_defers_during_backup(mocker):
+    from src.events.backup import BackupEvents
+
+    charm = mocker.MagicMock()
+    charm.state.is_backup_in_progress_any = True
+
+    evt = BackupEvents.__new__(BackupEvents)
+    evt.charm = charm
+    event = mocker.MagicMock()
+
+    evt._on_azure_credentials_gone(event)
+
+    event.defer.assert_called_once()
+    charm.state.cluster.update.assert_not_called()
+
+
+def test_on_azure_credentials_gone_clears_databag_and_converges_s3(mocker):
+    """Removing the Azure integrator clears the conflict, so S3 gets another go."""
+    from src.events.backup import BackupEvents
+    from src.literals import AZURE_RELATION_NAME, S3_RELATION_NAME
+
+    charm = mocker.MagicMock()
+    charm.state.is_backup_in_progress_any = False
+    charm.state.cluster.is_restore_in_progress = False
+    charm.unit.is_leader.return_value = True
+
+    s3_handler = mocker.Mock()
+    evt = BackupEvents.__new__(BackupEvents)
+    evt.charm = charm
+    evt._credentials_changed_handlers = {
+        S3_RELATION_NAME: s3_handler,
+        AZURE_RELATION_NAME: mocker.Mock(),
+    }
+
+    evt._on_azure_credentials_gone(mocker.MagicMock())
+
+    charm.state.cluster.update.assert_called_once_with({"azure_credentials": ""})
+    # Azure carries no charm-local CA, so nothing on disk is touched.
+    charm.backup_manager.remove_tls_ca_chain.assert_not_called()
+    s3_handler.assert_called_once()
+    evt._credentials_changed_handlers[AZURE_RELATION_NAME].assert_not_called()
+
+
+def test_on_azure_credentials_gone_non_leader_does_not_clear_databag(mocker):
+    from src.events.backup import BackupEvents
+
+    charm = mocker.MagicMock()
+    charm.state.is_backup_in_progress_any = False
+    charm.state.cluster.is_restore_in_progress = False
+    charm.unit.is_leader.return_value = False
+
+    evt = BackupEvents.__new__(BackupEvents)
+    evt.charm = charm
+    evt._credentials_changed_handlers = {}
+
+    evt._on_azure_credentials_gone(mocker.MagicMock())
+
+    charm.state.cluster.update.assert_not_called()
+
+
+def test_on_s3_credentials_gone_converges_the_surviving_azure_backend(mocker):
+    """The mirror case: dropping S3 must re-drive the still-related Azure backend."""
+    from src.events.backup import BackupEvents
+    from src.literals import AZURE_RELATION_NAME, S3_RELATION_NAME
+
+    charm = mocker.MagicMock()
+    charm.state.is_backup_in_progress_any = False
+    charm.state.cluster.is_restore_in_progress = False
+    charm.unit.is_leader.return_value = True
+
+    azure_handler = mocker.Mock()
+    evt = BackupEvents.__new__(BackupEvents)
+    evt.charm = charm
+    evt._credentials_changed_handlers = {
+        S3_RELATION_NAME: mocker.Mock(),
+        AZURE_RELATION_NAME: azure_handler,
+    }
+
+    evt._on_s3_credentials_gone(mocker.MagicMock())
+
+    charm.state.cluster.update.assert_called_once_with({"s3_credentials": ""})
+    azure_handler.assert_called_once()
+
+
+def test_azure_parameters_rejects_an_unknown_connection_protocol():
+    """Only the six documented integrator values are accepted.
+
+    Anything else would fall through to the plaintext branch of the account URL
+    and fail obscurely at request time instead of at the relation boundary.
+    """
+    import pytest
+    from pydantic import ValidationError
+
+    from src.core.models import AzureStorageParameters
+
+    with pytest.raises(ValidationError):
+        AzureStorageParameters.model_validate(
+            {
+                "container": "c",
+                "storage-account": "a",
+                "secret-key": "k",
+                "connection-protocol": "ftp",
+                "path": "valkey",
+            }
+        )
+
+
+def test_azure_parameters_accepts_every_blob_connection_protocol():
+    from src.core.models import AzureStorageParameters
+    from src.literals import AZURE_HTTP_PROTOCOLS, AZURE_HTTPS_PROTOCOLS
+
+    for proto in AZURE_HTTPS_PROTOCOLS | AZURE_HTTP_PROTOCOLS:
+        params = AzureStorageParameters.model_validate(
+            {
+                "container": "c",
+                "storage-account": "a",
+                "secret-key": "k",
+                "connection-protocol": proto,
+                "path": "valkey",
+            }
+        )
+        assert params.connection_protocol == proto
+
+
+def test_create_backup_kills_producer_on_an_unexpected_upload_error(mocker):
+    """No SDK escape may orphan the producer.
+
+    The backends translate their own failures, but an exception neither handler
+    names would otherwise skip `proc.kill()` and leave `valkey-cli --rdb -`
+    blocked on a pipe nobody drains.
+    """
+    import pytest
+
+    from src.managers.backup import BackupManager
+
+    state = _make_state(mocker)
+    workload = mocker.MagicMock()
+    workload.cli = "valkey-cli"
+    proc = mocker.MagicMock()
+    workload.exec_stream.return_value = proc
+
+    backend = _fake_backend(mocker)
+    backend.upload.side_effect = RuntimeError("SDK leaked something new")
+    fixed_now = mocker.patch("src.managers.backup.datetime")
+    fixed_now.now.return_value.strftime.return_value = "2026-05-13T10:00:00Z"
+
+    with pytest.raises(RuntimeError):
+        BackupManager(state=state, workload=workload).create_backup()
+
+    proc.kill.assert_called_once()
     # The lock is still released on the way out.
     assert state.unit_server.update.call_args_list[-1].args[0] == {"backup_id": ""}

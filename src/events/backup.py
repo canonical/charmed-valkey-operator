@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 import ops
 from object_storage import (
+    AzureStorageRequirer,
     S3Requirer,
     StorageConnectionInfoChangedEvent,
     StorageConnectionInfoGoneEvent,
@@ -26,8 +27,9 @@ from common.exceptions import (
     ValkeyRestoreError,
     ValkeyWorkloadCommandError,
 )
-from core.models import BackupCredentials, S3Parameters
+from core.models import AzureStorageParameters, BackupCredentials, S3Parameters
 from literals import (
+    AZURE_RELATION_NAME,
     BACKUP_CREDENTIAL_FIELDS,
     PEER_RELATION,
     RESTORE_LOAD_TIMEOUT_S,
@@ -70,9 +72,22 @@ class BackupEvents(ops.Object):
         self.framework.observe(
             self.s3_requirer.on.storage_connection_info_gone, self._on_s3_credentials_gone
         )
+        self.azure_requirer = AzureStorageRequirer(self.charm, AZURE_RELATION_NAME)
+        self.framework.observe(
+            self.azure_requirer.on.storage_connection_info_changed,
+            self._on_azure_credentials_changed,
+        )
+        self.framework.observe(
+            self.azure_requirer.on.storage_connection_info_gone,
+            self._on_azure_credentials_gone,
+        )
         # Every backend's changed path, keyed by its relation: used to re-drive the
-        # others when one integrator goes away and un-blocks them.
-        self._credentials_changed_handlers = {S3_RELATION_NAME: self._on_s3_credentials_changed}
+        # others when one integrator goes away and un-blocks them. Keys must cover
+        # BACKUP_CREDENTIAL_FIELDS or a registered backend never converges.
+        self._credentials_changed_handlers = {
+            S3_RELATION_NAME: self._on_s3_credentials_changed,
+            AZURE_RELATION_NAME: self._on_azure_credentials_changed,
+        }
         # Recover credentials when leadership moves; each handler early-returns if
         # its requirer has no info, so firing them all on leader-elected is safe.
         for handler in self._credentials_changed_handlers.values():
@@ -204,6 +219,32 @@ class BackupEvents(ops.Object):
             self.charm.state.cluster.update({"s3_credentials": ""})
 
         self._reconcile_other_backends(event, exclude=S3_RELATION_NAME)
+
+    def _on_azure_credentials_changed(
+        self,
+        event: StorageConnectionInfoChangedEvent
+        | StorageConnectionInfoGoneEvent
+        | ops.LeaderElectedEvent,
+    ) -> None:
+        """Handle initial and updated Azure Storage integrator credentials."""
+        if not (az_info := self.azure_requirer.get_storage_connection_info()):
+            return
+        logger.info("Azure credentials changed; refreshing backup configuration")
+        self._store_credentials(dict(az_info), AzureStorageParameters, "azure_credentials", event)
+
+    def _on_azure_credentials_gone(self, event: StorageConnectionInfoGoneEvent) -> None:
+        """Handle removal of the Azure Storage credentials relation."""
+        if self._backup_or_restore_in_progress():
+            logger.warning("Backup or restore in progress; deferring credentials_gone")
+            event.defer()
+            return
+
+        # The endpoint CA is an S3-only concept (azure_storage carries no CA
+        # field), so there is nothing on disk to remove here.
+        if self.charm.unit.is_leader():
+            self.charm.state.cluster.update({"azure_credentials": ""})
+
+        self._reconcile_other_backends(event, exclude=AZURE_RELATION_NAME)
 
     def _on_create_backup_action(self, event: ops.ActionEvent) -> None:
         """Run a streaming RDB backup of this unit's Valkey instance to object storage."""

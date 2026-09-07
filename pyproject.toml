@@ -22,6 +22,8 @@ ldap3 = ">=2.9.1"
 boto3 = "^1.40"
 mypy-boto3-s3 = "^1.40"
 object-storage-charmlib = "^1.0.0"
+# >=12.15 for StorageStreamDownloader.read(), which the restore path streams through
+azure-storage-blob = "^12.19"
 
 [tool.poetry.requires-plugins]
 poetry-plugin-export = ">=1.8"
@@ -72,6 +74,7 @@ valkey-glide = "^2.5"
 kubernetes = "^35.0.0"
 boto3 = "^1.40"
 mypy-boto3-s3 = "^1.40"
+azure-storage-blob = "^12.19"
 
 [tool.coverage.run]
 branch = true

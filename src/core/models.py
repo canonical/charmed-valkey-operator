@@ -33,6 +33,9 @@ from pydantic import (
 from typing_extensions import Annotated
 
 from literals import (
+    AZURE_HTTP_PROTOCOLS,
+    AZURE_HTTPS_PROTOCOLS,
+    AZURE_REJECTED_PROTOCOLS,
     CLIENTS_USERS_SECRET_LABEL_SUFFIX,
     INTERNAL_CERTS_SECRET_LABEL_SUFFIX,
     INTERNAL_USERS_SECRET_LABEL_SUFFIX,
@@ -117,10 +120,90 @@ class S3Parameters(BaseModel):
         return value
 
 
+class AzureStorageParameters(BaseModel):
+    """Validated, normalised Azure Blob parameters from the azure_storage relation.
+
+    Parses the azure-storage-integrator payload (hyphenated keys) into typed
+    attributes, trimming whitespace and the separators that would corrupt blob
+    key paths, and rejecting a payload missing a required field or whose
+    container/path strip to empty. ``path`` is required at the charm layer even
+    though the lib contract leaves it optional, so listing can never enumerate
+    the whole container. Unknown integrator fields are ignored.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    container: str
+    storage_account: str = Field(alias="storage-account")
+    secret_key: str = Field(alias="secret-key")
+    connection_protocol: str = Field(alias="connection-protocol")
+    path: str
+    endpoint: str | None = None
+    resource_group: str | None = Field(alias="resource-group", default=None)
+
+    @field_validator(
+        "container",
+        "storage_account",
+        "secret_key",
+        "connection_protocol",
+        "path",
+        "endpoint",
+        "resource_group",
+        mode="before",
+    )
+    @classmethod
+    def _strip_whitespace(cls, value: object) -> object:
+        # A copy-pasted key with a trailing newline is common.
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("connection_protocol", mode="before")
+    @classmethod
+    def _lowercase_protocol(cls, value: object) -> object:
+        # The protocol is matched against lowercase scheme sets downstream; an
+        # integrator sending "HTTPS" must not fall through to the http branch.
+        return value.lower() if isinstance(value, str) else value
+
+    @field_validator("endpoint")
+    @classmethod
+    def _strip_trailing_slash(cls, value: str | None) -> str | None:
+        # A trailing "/" on the endpoint would double up in the request URL.
+        return value.rstrip("/") if value else value
+
+    @field_validator("container", "path")
+    @classmethod
+    def _strip_surrounding_slashes(cls, value: str) -> str:
+        # Leading/trailing "/" would yield blob names like "//<id>"; stripping
+        # also collapses container="/" or path="/" to "" so _reject_empty catches it.
+        return value.strip("/")
+
+    @field_validator("container", "storage_account", "secret_key", "connection_protocol", "path")
+    @classmethod
+    def _reject_empty(cls, value: str, info: ValidationInfo) -> str:
+        # An empty path makes list_backups enumerate the whole container
+        # (cross-tenant leak in a shared container); reject empties outright.
+        if not value:
+            raise ValueError(f"{info.field_name} must not be empty")
+        return value
+
+    @field_validator("connection_protocol")
+    @classmethod
+    def _require_a_blob_protocol(cls, value: str) -> str:
+        # abfs/abfss are ADLS-Gen2 (*.dfs.*) endpoints served by the datalake SDK,
+        # not BlobServiceClient; reject rather than silently mis-talk the Blob API.
+        if value in AZURE_REJECTED_PROTOCOLS:
+            raise ValueError(f"connection-protocol {value} (ADLS-Gen2) is not supported")
+        # Anything outside the integrator's documented set would fall through to
+        # the plaintext branch of the account URL and fail obscurely at request
+        # time; refuse it here, at the relation boundary, instead.
+        if value not in AZURE_HTTPS_PROTOCOLS | AZURE_HTTP_PROTOCOLS:
+            raise ValueError(f"connection-protocol {value} is not an Azure Blob protocol")
+        return value
+
+
 # Every backend's validated credentials envelope. A backend widens this union,
 # and the layers above (ClusterState, BackupManager, build_backend) follow
 # without a signature change of their own.
-BackupCredentials = S3Parameters
+BackupCredentials = S3Parameters | AzureStorageParameters
 
 
 class PeerAppModel(PeerModel):
@@ -141,6 +224,7 @@ class PeerAppModel(PeerModel):
     client_user_epoch: float = Field(default=0)
     ldap_user_epoch: float | int = Field(default=0)
     s3_credentials: ExtraSecretStr = Field(default=None)
+    azure_credentials: ExtraSecretStr = Field(default=None)
     restore_id: str = Field(default="")
     restore_token: str = Field(default="")
     restore_instruction: str = Field(default="")
@@ -377,6 +461,21 @@ class ValkeyCluster(RelationState):
             return None
         try:
             return S3Parameters.model_validate_json(self.model.s3_credentials)
+        except ValidationError:
+            return None
+
+    @property
+    def azure_credentials(self) -> "AzureStorageParameters | None":
+        """Return the parsed Azure Blob connection payload, or None if not set.
+
+        Mirrors ``s3_credentials``: the leader writes a JSON-serialised
+        ``AzureStorageParameters``, and a parse failure here is defensive
+        (the payload was validated before writing) and also reads as unset.
+        """
+        if not self.model or not self.model.azure_credentials:
+            return None
+        try:
+            return AzureStorageParameters.model_validate_json(self.model.azure_credentials)
         except ValidationError:
             return None
 

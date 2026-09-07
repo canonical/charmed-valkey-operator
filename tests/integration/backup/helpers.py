@@ -2,7 +2,7 @@
 # Copyright 2026 Canonical Ltd.
 # See LICENSE file for licensing details.
 
-"""Shared helpers for the S3 backup/restore integration tests."""
+"""Shared helpers for the object-storage backup/restore integration tests."""
 
 from __future__ import annotations
 
@@ -16,6 +16,8 @@ from tests.integration.helpers import APP_NAME, IMAGE_RESOURCE, are_apps_active_
 
 S3_INTEGRATOR_APP = "s3-integrator"
 S3_CREDS_SECRET = "s3-creds"
+AZURE_INTEGRATOR_APP = "azure-storage-integrator"
+AZURE_CREDS_SECRET = "azure-creds"
 BACKUP_ID_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
 
@@ -99,6 +101,91 @@ def deploy_and_relate_s3(
     juju.wait(
         lambda status: are_apps_active_and_agents_idle(
             status, APP_NAME, S3_INTEGRATOR_APP, idle_period=30
+        ),
+        timeout=1000,
+        delay=5,
+        successes=3,
+    )
+
+
+def deploy_and_relate_azure(
+    juju: jubilant.Juju,
+    charm: str,
+    substrate: Substrate,
+    azurite: dict,
+    num_units: int = 3,
+) -> None:
+    """Deploy the local valkey charm + azure-storage-integrator, wire creds, and relate them.
+
+    Mirrors ``deploy_and_relate_s3``: idempotent, each step skipped when already
+    done, so it is safe to call at the top of every test and again after a
+    redeploy. The integrator setup is guarded on the integrator app's presence,
+    and the valkey app is (re)deployed and (re)related on its own.
+
+    The `azurite` fixture mints a fresh container name per run, so a model left
+    over from an earlier run keeps the *old* container in the integrator's config
+    (`juju remove-application azure-storage-integrator` + `juju remove-secret
+    azure-creds` between runs, or backups land where the test does not look).
+    """
+    status = juju.status()
+
+    if AZURE_INTEGRATOR_APP not in status.apps:
+        juju.deploy(AZURE_INTEGRATOR_APP, channel="1/edge")
+        # azure-storage-integrator takes the account key as a Juju secret (content
+        # key `secret-key`): create + grant it, then point `credentials` at its URI.
+        # The rest is plain config -- for Azurite, `connection-protocol=http` plus an
+        # explicit `endpoint` keeps the integrator on the emulator, not real Azure.
+        creds = juju.add_secret(
+            name=AZURE_CREDS_SECRET,
+            content={"secret-key": azurite["secret-key"]},
+        )
+        juju.grant_secret(identifier=creds, app=AZURE_INTEGRATOR_APP)
+        juju.config(
+            AZURE_INTEGRATOR_APP,
+            {
+                "credentials": creds,
+                "container": azurite["container"],
+                "storage-account": azurite["storage-account"],
+                "connection-protocol": azurite["connection-protocol"],
+                "endpoint": azurite["endpoint"],
+                # Required by the charm even though the integrator defaults it to
+                # "": an empty prefix would let list-backups enumerate the whole
+                # container.
+                "path": azurite["path"],
+            },
+        )
+
+    # Always deploy the local charm under test -- never a Charmhub revision.
+    if APP_NAME not in status.apps:
+        juju.deploy(
+            charm,
+            resources=IMAGE_RESOURCE if substrate == Substrate.K8S else None,
+            num_units=num_units,
+            trust=True,
+        )
+
+    # Require agents idle as well as workloads active: after `integrate` the
+    # workloads stay active while the leader's relation hooks (ensure_container +
+    # credential storage) are still running, so a workload-only wait can return
+    # before Azure is actually wired up.
+    juju.wait(
+        lambda status: are_apps_active_and_agents_idle(
+            status, APP_NAME, AZURE_INTEGRATOR_APP, idle_period=30
+        ),
+        timeout=1000,
+        delay=5,
+        successes=3,
+    )
+
+    # Integrate only when the relation does not yet exist (a redeploy drops it).
+    try:
+        juju.integrate(APP_NAME, AZURE_INTEGRATOR_APP)
+    except jubilant.CLIError as exc:
+        if "already exists" not in str(exc).lower():
+            raise
+    juju.wait(
+        lambda status: are_apps_active_and_agents_idle(
+            status, APP_NAME, AZURE_INTEGRATOR_APP, idle_period=30
         ),
         timeout=1000,
         delay=5,

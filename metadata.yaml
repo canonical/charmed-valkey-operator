@@ -63,6 +63,10 @@ requires:
     interface: s3
     limit: 1
     optional: true
+  azure-credentials:
+    interface: azure_storage
+    limit: 1
+    optional: true
   ldap-ca-cert:
     interface: certificate_transfer
     limit: 1
