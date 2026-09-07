@@ -293,13 +293,16 @@ def test_ensure_ldap_auth(juju: jubilant.Juju) -> None:
     username = "jennydoe"
     password = "dogood"
 
-    assert not auth_test(
-        juju=juju,
-        endpoints=endpoints,
-        username=username,
-        password=password,
-        connection_timeout=LDAP_CONNECTION_TIMEOUT_MS,
-    )
+    try:
+        assert not auth_test(
+            juju=juju,
+            endpoints=endpoints,
+            username=username,
+            password=password,
+            connection_timeout=LDAP_CONNECTION_TIMEOUT_MS,
+        )
+    except WrongPassError:
+        logger.info("Auth test failed as expected")
 
 
 def test_disable_ldap(juju: jubilant.Juju, substrate: Substrate) -> None:
