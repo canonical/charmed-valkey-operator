@@ -256,6 +256,7 @@ class PeerUnitModel(PeerModel):
     restore_failed: str = Field(default="")
     ldap_enabled: bool = Field(default=False)
     ldap_user_epoch: float | int = Field(default=0)
+    ldap_sync_failed: bool = Field(default=False)
 
 
 class RelationState:
