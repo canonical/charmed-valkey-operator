@@ -57,6 +57,7 @@ class LDAPEvents(ops.Object):
         self.framework.observe(
             self.charm.on[PEER_RELATION].relation_changed, self._on_peer_relation_changed
         )
+        self.framework.observe(self.charm.on.update_status, self._on_update_status)
 
     def _on_ldap_ready(self, event: LdapReadyEvent) -> None:
         """Handle the setup of the LDAP relation."""
@@ -328,7 +329,8 @@ class LDAPEvents(ops.Object):
     def _on_update_status(self, _: ops.UpdateStatusEvent) -> None:
         """Handle update status for LDAP."""
         if (
-            not self.charm.state.unit_server.is_ldap_enabled
+            not self.charm.state.unit_server.is_started
+            or not self.charm.state.unit_server.is_ldap_enabled
             or not self.charm.state.is_ldap_valid
             or self.charm.state.cluster.is_restore_in_progress
         ):

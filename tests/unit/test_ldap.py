@@ -244,7 +244,6 @@ def test_enable_ldap(cloud_spec):
             patch("managers.cluster.ClusterManager.reload_acl_file") as reload_acl,
         ):
             charm.ldap_events._on_ldap_ready(event)
-            state_out = manager.run()
 
             ldap_config = charm.config_manager.generate_ldap_config()
             assert ldap_config["ldap.search_bind_passwd"] == "dummy"
@@ -255,10 +254,13 @@ def test_enable_ldap(cloud_spec):
             assert ldap_config["ldap.search_dn_attribute"] == "DN"
             assert ldap_config["ldap.search_filter"] == "objectClass=posixAccount"
 
+            # counted before the update-status below runs, which reconciles the ACL again
             set_config.assert_called_once()
             reload_ldap.assert_called_once()
             set_acl.assert_called_once()
             reload_acl.assert_called_once()
+
+            state_out = manager.run()
             assert state_out.get_relation(1).local_unit_data.get("ldap-enabled") == "true"
 
 
@@ -1501,14 +1503,23 @@ def test_sync_ldap_users_up_to_date(cloud_spec):
 
 
 def _ldap_query_state(
-    cloud_spec, config: dict[str, str], leader: bool = False
+    cloud_spec,
+    config: dict[str, str],
+    leader: bool = False,
+    ldap_enabled: bool = False,
+    app_data: dict[str, str] | None = None,
+    started: bool = True,
 ) -> tuple[testing.Context, testing.State]:
     """Build a context and state with a fully valid LDAP setup for filter tests."""
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
+    unit_data = {"start-state": "started"} if started else {}
+    if ldap_enabled:
+        unit_data["ldap-enabled"] = "true"
     peer_relation = testing.PeerRelation(
         id=1,
         endpoint=PEER_RELATION,
-        local_unit_data={"start-state": "started"},
+        local_unit_data=unit_data,
+        local_app_data=app_data or {},
     )
     status_peer_relation = testing.PeerRelation(id=2, endpoint=STATUS_PEERS_RELATION)
     ldap_secret = testing.Secret({"password": "dummy"})
@@ -1640,3 +1651,80 @@ def test_ldap_acl_skips_users_while_ca_cert_missing(cloud_spec):
         ):
             assert charm.auth_manager._get_ldap_user_acl_lines() == ""
             get_connection.assert_not_called()
+
+
+def test_update_status_reconciles_ldap_acl(cloud_spec):
+    """update-status re-syncs the LDAP users into the ACL on a started, LDAP-enabled unit.
+
+    A unit whose ACL was written while the LDAP query could not run (a secret-backend timeout,
+    the CA landing on a later event) keeps an ACL without the LDAP users; no relation event
+    revisits it. update-status is the reconcile that converges it without `sync-ldap-users`.
+    """
+    ctx, state_in = _ldap_query_state(cloud_spec, {}, ldap_enabled=True)
+
+    with (
+        patch("managers.tls.TLSManager.will_certificate_expire", return_value=False),
+        patch("managers.sentinel.SentinelManager.reconcile_failover_suppression"),
+        patch("charmlibs.pathops.ContainerPath.exists", return_value=True),
+        patch("managers.auth.AuthManager._get_internal_user_acl_line", return_value=""),
+        patch("managers.auth.AuthManager._get_client_user_acl_lines", return_value=""),
+        patch("managers.auth.AuthManager._get_ldap_users_for_group", return_value=["clark_kent"]),
+        patch("workload_k8s.ValkeyK8sWorkload.write_file") as write_file,
+        patch("managers.cluster.ClusterManager.reload_acl_file") as reload_acl,
+    ):
+        ctx.run(ctx.on.update_status(), state_in)
+
+    reload_acl.assert_called_once()
+    written_acl = "".join(
+        str(call.args[0])
+        for call in write_file.call_args_list
+        if "user default off" in call.args[0]
+    )
+    assert "user clark_kent on " in written_acl
+
+
+def test_update_status_skips_ldap_acl_during_restore(cloud_spec):
+    """During a restore, update-status must not rewrite or reload the ACL.
+
+    The restore workflow restarts the primary around the RDB swap; reloading ACLs into it
+    mid-restore would collide with that. Restore completion re-delivers relation-changed and
+    update-status keeps coming, so the sync catches up once `restore-id` is cleared.
+    """
+    ctx, state_in = _ldap_query_state(
+        cloud_spec, {}, ldap_enabled=True, app_data={"restore-id": "2026-05-13T10:00:00Z"}
+    )
+
+    with (
+        patch("managers.tls.TLSManager.will_certificate_expire", return_value=False),
+        patch("managers.sentinel.SentinelManager.reconcile_failover_suppression"),
+        patch("charmlibs.pathops.ContainerPath.exists", return_value=True),
+        patch("managers.auth.AuthManager._get_internal_user_acl_line", return_value=""),
+        patch("managers.auth.AuthManager._get_client_user_acl_lines", return_value=""),
+        patch("managers.auth.AuthManager._get_ldap_users_for_group", return_value=["clark_kent"]),
+        patch("managers.cluster.ClusterManager.reload_acl_file") as reload_acl,
+    ):
+        ctx.run(ctx.on.update_status(), state_in)
+
+    reload_acl.assert_not_called()
+
+
+def test_update_status_skips_ldap_acl_before_unit_started(cloud_spec):
+    """update-status leaves the ACL alone on a unit whose Valkey has not started yet.
+
+    `ldap-enabled` can be set before the start machine finishes; the startup path writes the ACL
+    itself, and `acl load` against a server that is not running only produces an error every
+    update-status.
+    """
+    ctx, state_in = _ldap_query_state(cloud_spec, {}, ldap_enabled=True, started=False)
+
+    with (
+        patch("managers.tls.TLSManager.will_certificate_expire", return_value=False),
+        patch("charmlibs.pathops.ContainerPath.exists", return_value=True),
+        patch("managers.auth.AuthManager._get_internal_user_acl_line", return_value=""),
+        patch("managers.auth.AuthManager._get_client_user_acl_lines", return_value=""),
+        patch("managers.auth.AuthManager._get_ldap_users_for_group", return_value=["clark_kent"]),
+        patch("managers.cluster.ClusterManager.reload_acl_file") as reload_acl,
+    ):
+        ctx.run(ctx.on.update_status(), state_in)
+
+    reload_acl.assert_not_called()
