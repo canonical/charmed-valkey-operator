@@ -5,6 +5,7 @@
 """Charmed k8s operator for Valkey."""
 
 import logging
+import os
 
 import ops
 from data_platform_helpers.advanced_statuses.handler import StatusHandler
@@ -43,13 +44,7 @@ class ValkeyCharm(ops.CharmBase):
 
     def __init__(self, *args) -> None:
         super().__init__(*args)
-        try:
-            cloud_spec = self.model.get_cloud_spec()
-        except ops.ModelError:
-            logger.error("Application must be deployed with `trust` to get cloud spec")
-            raise
-
-        if cloud_spec.type == "kubernetes":
+        if "KUBERNETES_SERVICE_HOST" in os.environ:
             self.substrate = Substrate.K8S
             self.workload = ValkeyK8sWorkload(container=self.unit.get_container(CONTAINER))
         else:
