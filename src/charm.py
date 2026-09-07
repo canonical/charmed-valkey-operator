@@ -44,7 +44,7 @@ class ValkeyCharm(ops.CharmBase):
 
     def __init__(self, *args) -> None:
         super().__init__(*args)
-        if "KUBERNETES_SERVICE_HOST" in os.environ:
+        if os.environ.get("KUBERNETES_SERVICE_HOST"):
             self.substrate = Substrate.K8S
             self.workload = ValkeyK8sWorkload(container=self.unit.get_container(CONTAINER))
         else:
