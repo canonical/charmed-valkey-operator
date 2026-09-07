@@ -46,12 +46,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Every root the GCS SDK can raise past its own retries: api_core's (every HTTP
-# status class plus RetryError), google-auth's (a bad key at token exchange, an
-# unreachable token endpoint), resumable-media's (what the BlobWriter path
-# raises for a non-2xx on initiate or on a chunk -- that path is not wrapped by
-# the SDK's _raise_from_invalid_response, and InvalidResponse's base class is
-# plain Exception) and requests' (transport paths not folded into a RetryError).
+# Every root the GCS SDK can raise past its own retries. InvalidResponse and
+# DataCorruption derive from plain Exception and reach us raw from the BlobWriter
+# path, which the SDK never wraps in _raise_from_invalid_response.
 _GCS_ERRORS = (
     GoogleAPIError,
     GoogleAuthError,

@@ -267,21 +267,20 @@ def azure_container(azurite: dict):
 
 # ── Google Cloud Storage (real) ───────────────────────────────────────────────
 # Not an emulator: gcs-integrator publishes no endpoint, so the charm can only
-# ever talk to storage.googleapis.com. The service-account key comes from the
-# environment (a CI secret) and is handed to the integrator verbatim, as mongo
-# does: JSON or base64 JSON, the charm decodes either at its boundary. The
-# bucket is the data-platform shared test bucket unless overridden; objects land
-# under a per-run prefix that is cleaned up.
+# ever talk to storage.googleapis.com. Objects land under a per-run prefix in
+# the shared test bucket and are cleaned up on teardown.
 GCS_SERVICE_ACCOUNT_ENV = "GCS_SERVICE_ACCOUNT"
 GCS_BUCKET_ENV = "GCS_BUCKET"
 GCS_DEFAULT_BUCKET = "data-charms-testing"
 
 
 def _service_account_info(value: str) -> dict:
-    """Decode a JSON-or-base64 service-account key, the way the charm does.
+    """Decode the service-account key the way the charm does.
 
-    Inner whitespace is dropped first: `base64` without -w0 wraps at 76 columns,
-    and spread's env export turns those newlines into spaces.
+    The env value is handed to the integrator verbatim (JSON or base64 JSON) and
+    only decoded here, for the test's own client. Inner whitespace is dropped
+    first: `base64` without -w0 wraps at 76 columns, and spread's env export
+    turns those newlines into spaces.
     """
     try:
         return json.loads(value)

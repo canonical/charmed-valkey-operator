@@ -11,8 +11,15 @@ import re
 
 import jubilant
 
-from literals import Substrate
-from tests.integration.helpers import APP_NAME, IMAGE_RESOURCE, are_apps_active_and_agents_idle
+from literals import CharmUsers, Substrate
+from tests.integration.helpers import (
+    APP_NAME,
+    IMAGE_RESOURCE,
+    are_apps_active_and_agents_idle,
+    exec_valkey_cli,
+    get_password,
+    get_primary_ip,
+)
 
 S3_INTEGRATOR_APP = "s3-integrator"
 S3_CREDS_SECRET = "s3-creds"
@@ -21,6 +28,35 @@ AZURE_CREDS_SECRET = "azure-creds"
 GCS_INTEGRATOR_APP = "gcs-integrator"
 GCS_CREDS_SECRET = "gcs-creds"
 BACKUP_ID_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+
+
+def write_key(juju: jubilant.Juju, key: str, value: str) -> None:
+    """Write *key=value* to the Valkey primary via valkey-cli."""
+    password = get_password(juju)
+    primary_ip = get_primary_ip(juju, APP_NAME)
+    exec_valkey_cli(
+        primary_ip,
+        username=CharmUsers.VALKEY_ADMIN.value,
+        password=password,
+        command=f"SET {key} {value}",
+    )
+
+
+def read_key(juju: jubilant.Juju, unit_name: str, key: str) -> str | None:
+    """GET *key* from the named unit; returns None for missing keys."""
+    status = juju.status()
+    model_info = juju.show_model()
+    unit = status.apps[APP_NAME].units[unit_name]
+    # K8s: use pod IP; VM: use public address (mirrors get_cluster_addresses logic).
+    address = unit.address if model_info.type == "kubernetes" else unit.public_address
+    password = get_password(juju)
+    result = exec_valkey_cli(
+        address,
+        username=CharmUsers.VALKEY_ADMIN.value,
+        password=password,
+        command=f"GET {key}",
+    )
+    return result.stdout if result.stdout else None
 
 
 def deploy_and_relate_s3(
@@ -217,7 +253,7 @@ def deploy_and_relate_gcs(
     status = juju.status()
 
     if GCS_INTEGRATOR_APP not in status.apps:
-        juju.deploy(GCS_INTEGRATOR_APP, channel="1/edge")
+        juju.deploy(GCS_INTEGRATOR_APP, channel="1/stable")
         # gcs-integrator takes the service-account key as a Juju secret (content
         # key `secret-key`, published verbatim): create + grant it, then point
         # `credentials` at its URI. jubilant writes the content through a temp
