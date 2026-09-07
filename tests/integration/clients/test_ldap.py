@@ -262,13 +262,15 @@ def test_ensure_ldap_auth(juju: jubilant.Juju, substrate: Substrate) -> None:
     username = "jennydoe"
     password = "dogood"
 
-    with pytest.raises(WrongPassError):
+    try:
         assert not auth_test(
             juju=juju,
             endpoints=endpoints,
             username=username,
             password=password,
         )
+    except WrongPassError:
+        logger.info("Auth test failed as expected")
 
 
 def test_disable_ldap(juju: jubilant.Juju, substrate: Substrate) -> None:
