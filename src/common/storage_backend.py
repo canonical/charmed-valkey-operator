@@ -468,34 +468,23 @@ class GCSBackend:
     def ensure_container(self) -> None:
         """Create the configured bucket; tolerates an already-existing one.
 
-        Get first. NotFound means absent (GCS answers 404 only for a name nobody
-        owns), so create; a Conflict there is a race on a global name -- usually
-        ours, and if not, the first backup reports Forbidden. Forbidden on the
-        get means the bucket exists but its metadata is not readable: our bucket
-        under a key without ``storage.buckets.get``, or somebody else's. A
-        create could only fail, so a one-object list under the prefix decides
-        instead -- rather than storing credentials that fail at the first backup.
+        A key without bucket permissions gets Forbidden from create even when
+        the bucket exists, so on Conflict or Forbidden a one-object list under
+        the prefix decides whether the bucket is usable.
         """
         try:
             client = self._client()
+            bucket = client.bucket(self.params.bucket)
+            if self.params.storage_class:
+                bucket.storage_class = self.params.storage_class
             try:
-                client.get_bucket(self.params.bucket)
-                return
-            except NotFound:
-                bucket = client.bucket(self.params.bucket)
-                if self.params.storage_class:
-                    bucket.storage_class = self.params.storage_class
-                try:
-                    client.create_bucket(bucket, project=self._info().get("project_id"))
-                except Conflict:
-                    logger.info("Using existing bucket %s", self.params.bucket)
-            except Forbidden:
+                client.create_bucket(bucket, project=self._info().get("project_id"))
+            except (Conflict, Forbidden):
                 prefix = f"{self.params.path}/"
                 next(
-                    iter(client.list_blobs(self.params.bucket, prefix=prefix, max_results=1)),
-                    None,
+                    iter(client.list_blobs(self.params.bucket, prefix=prefix, max_results=1)), None
                 )
-                logger.info("Using existing bucket %s (objects listable)", self.params.bucket)
+                logger.info("Using existing bucket %s", self.params.bucket)
         except _GCS_ERRORS as e:
             raise StorageBackendError(str(e), safe_code=self._error_code(e)) from e
 

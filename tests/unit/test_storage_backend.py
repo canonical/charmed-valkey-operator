@@ -733,16 +733,14 @@ def _gcs_params(**overrides):
 def _gcs_backend(mocker, **overrides):
     """Build a GCSBackend with its storage.Client faked; return (backend, client).
 
-    ``client.bucket()`` and ``client.get_bucket()`` hand out the same MagicMock
-    bucket, so a test can reach the blob through either path. The blob's writer
-    is a context manager that re-raises (``__exit__`` -> False), as the real one.
+    The blob's writer is a context manager that re-raises (``__exit__`` -> False),
+    as the real one does.
     """
     from src.common.storage_backend import GCSBackend
 
     client = mocker.MagicMock()
     bucket = mocker.MagicMock()
     client.bucket.return_value = bucket
-    client.get_bucket.return_value = bucket
     writer = mocker.MagicMock()
     writer.__enter__.return_value = writer
     writer.__exit__.return_value = False
@@ -832,95 +830,75 @@ def test_gcsbackend_location_names_the_destination_without_credentials(mocker):
 # ── ensure_container ────────────────────────────────────────────────────
 
 
-def test_gcsbackend_ensure_container_uses_an_existing_bucket(mocker):
-    backend, client = _gcs_backend(mocker)
-
-    backend.ensure_container()
-
-    client.get_bucket.assert_called_once_with("b")
-    client.create_bucket.assert_not_called()
-    client.list_blobs.assert_not_called()
-
-
 def test_gcsbackend_ensure_container_creates_a_missing_bucket(mocker):
-    from google.api_core.exceptions import NotFound
-
     backend, client = _gcs_backend(mocker, **{"storage-class": "nearline"})
-    client.get_bucket.side_effect = NotFound("no such bucket")
 
     backend.ensure_container()
 
     bucket = client.bucket.return_value
     assert bucket.storage_class == "NEARLINE"
     client.create_bucket.assert_called_once_with(bucket, project="proj")
-
-
-def test_gcsbackend_ensure_container_tolerates_a_create_race(mocker):
-    """NotFound then Conflict: someone created it between the get and the create.
-
-    Bucket names are global, so that someone may not be us; if it was not, the
-    first backup reports Forbidden, which is the honest answer.
-    """
-    from google.api_core.exceptions import Conflict, NotFound
-
-    backend, client = _gcs_backend(mocker)
-    client.get_bucket.side_effect = NotFound("no such bucket")
-    client.create_bucket.side_effect = Conflict("exists")
-
-    backend.ensure_container()  # no raise
-
     client.list_blobs.assert_not_called()
 
 
-def test_gcsbackend_ensure_container_probes_the_prefix_after_a_forbidden_get(mocker):
-    """ObjectAdmin without storage.buckets.get answers the get with 403 even though usable.
-
-    The same 403 also comes from a bucket owned by someone else. The bucket
-    exists either way (GCS answers 404 only for an absent name), so a create
-    could only fail; a one-object list under the prefix is the one request
-    that tells the two apart.
-    """
-    from google.api_core.exceptions import Forbidden
+def test_gcsbackend_ensure_container_tolerates_an_existing_bucket(mocker):
+    from google.api_core.exceptions import Conflict
 
     backend, client = _gcs_backend(mocker)
-    client.get_bucket.side_effect = Forbidden("no buckets.get")
+    client.create_bucket.side_effect = Conflict("exists")
     client.list_blobs.return_value = iter([])
 
     backend.ensure_container()  # no raise
 
-    client.create_bucket.assert_not_called()
+    client.list_blobs.assert_called_once_with("b", prefix="valkey/", max_results=1)
+
+
+def test_gcsbackend_ensure_container_probes_the_prefix_when_create_is_forbidden(mocker):
+    """A key without bucket permissions gets 403 from create even when the bucket exists."""
+    from google.api_core.exceptions import Forbidden
+
+    backend, client = _gcs_backend(mocker)
+    client.create_bucket.side_effect = Forbidden("no buckets.create")
+    client.list_blobs.return_value = iter([])
+
+    backend.ensure_container()  # no raise
+
     client.list_blobs.assert_called_once_with("b", prefix="valkey/", max_results=1)
 
 
 def test_gcsbackend_ensure_container_surfaces_a_failed_probe(mocker):
-    """A bucket we can neither read nor list is not ours; refuse to store creds."""
-    from google.api_core.exceptions import Forbidden
-
-    from common.exceptions import StorageBackendError
-
-    backend, client = _gcs_backend(mocker)
-    client.get_bucket.side_effect = Forbidden("no buckets.get")
-    client.list_blobs.side_effect = Forbidden("403 GET https://storage.googleapis.com/b")
-
-    with pytest.raises(StorageBackendError) as excinfo:
-        backend.ensure_container()
-    assert excinfo.value.safe_code == "Forbidden"
-    client.create_bucket.assert_not_called()
-
-
-def test_gcsbackend_ensure_container_wraps_other_errors(mocker):
     from google.api_core.exceptions import Forbidden, NotFound
 
     from common.exceptions import StorageBackendError
 
+    for probe_error, code in [
+        (Forbidden("403 GET https://storage.googleapis.com/b"), "Forbidden"),
+        (NotFound("404 GET https://storage.googleapis.com/b"), "NotFound"),
+    ]:
+        backend, client = _gcs_backend(mocker)
+        client.create_bucket.side_effect = Forbidden("no buckets.create")
+        client.list_blobs.side_effect = probe_error
+
+        with pytest.raises(StorageBackendError) as excinfo:
+            backend.ensure_container()
+        assert excinfo.value.safe_code == code
+        assert "storage.googleapis.com" not in excinfo.value.safe_code
+
+
+def test_gcsbackend_ensure_container_wraps_other_errors(mocker):
+    from google.api_core.exceptions import ServiceUnavailable
+
+    from common.exceptions import StorageBackendError
+
     backend, client = _gcs_backend(mocker)
-    client.get_bucket.side_effect = NotFound("no such bucket")
-    client.create_bucket.side_effect = Forbidden("403 POST https://storage.googleapis.com/b")
+    client.create_bucket.side_effect = ServiceUnavailable(
+        "503 POST https://storage.googleapis.com/b"
+    )
 
     with pytest.raises(StorageBackendError) as excinfo:
         backend.ensure_container()
-    assert excinfo.value.safe_code == "Forbidden"
-    assert "storage.googleapis.com" not in excinfo.value.safe_code
+    assert excinfo.value.safe_code == "ServiceUnavailable"
+    client.list_blobs.assert_not_called()
 
 
 # ── list / head ─────────────────────────────────────────────────────────
@@ -1278,7 +1256,6 @@ def test_gcsbackend_wraps_every_sdk_root(mocker):
         for name in _transport_calls(_gcs_backend(mocker)[0]):
             backend, client = _gcs_backend(mocker)
             bucket = client.bucket.return_value
-            client.get_bucket.side_effect = err
             client.create_bucket.side_effect = err
             client.list_blobs.side_effect = err
             bucket.get_blob.side_effect = err
