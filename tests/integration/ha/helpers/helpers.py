@@ -26,7 +26,7 @@ from tests.integration.helpers import APP_NAME, are_apps_active_and_agents_idle,
 
 logger = getLogger(__name__)
 
-VALKEY_SNAP_SERVICE_NAME = "snap.charmed-valkey.server.service"
+VALKEY_SNAP_SERVICE_NAME = "snap.valkey-charmed.server.service"
 VM_RESTART_DELAY_DEFAULT = 20
 K8S_RESTART_DELAY_DEFAULT = 5
 RESTART_DELAY_PATCHED = 120
