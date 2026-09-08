@@ -156,6 +156,7 @@ class S3Backend:
         return f"s3://{host}/{self.params.bucket}/{self.params.path}"
 
     def _key(self, backup_id: str) -> str:
+        """Object key for ``backup_id``: the path prefix plus the id."""
         return f"{self.params.path}/{backup_id}"
 
     @staticmethod
@@ -320,9 +321,11 @@ class AzureBackend:
         )
 
     def _blob(self, backup_id: str) -> "BlobClient":
+        """Return a blob client for ``backup_id``; no round trip yet."""
         return self._container().get_blob_client(self._key(backup_id))
 
     def _key(self, backup_id: str) -> str:
+        """Blob name for ``backup_id``: the path prefix plus the id."""
         return f"{self.params.path}/{backup_id}"
 
     @staticmethod
@@ -416,7 +419,7 @@ class GCSBackend:
         """
         return f"gs://{self.params.bucket}/{self.params.path}"
 
-    def _info(self) -> dict:
+    def _service_account_info(self) -> dict:
         """Parse the service-account key. GCSParameters canonicalised it to JSON."""
         return json.loads(self.params.secret_key)
 
@@ -429,9 +432,11 @@ class GCSBackend:
         cryptography rejects a PEM body it cannot parse with a bare ValueError;
         its message names the format, never the key material.
         """
-        info = self._info()
+        service_account_info = self._service_account_info()
         try:
-            return storage.Client.from_service_account_info(info, project=info.get("project_id"))
+            return storage.Client.from_service_account_info(
+                service_account_info, project=service_account_info.get("project_id")
+            )
         except ValueError as e:
             raise StorageBackendError(str(e), safe_code=GCS_INVALID_KEY_CODE) from e
 
@@ -440,9 +445,11 @@ class GCSBackend:
         return self._client().bucket(self.params.bucket)
 
     def _blob(self, backup_id: str) -> "GCSBlob":
+        """Return a blob handle for ``backup_id``; no round trip yet."""
         return self._bucket().blob(self._key(backup_id))
 
     def _key(self, backup_id: str) -> str:
+        """Object name for ``backup_id``: the path prefix plus the id."""
         return f"{self.params.path}/{backup_id}"
 
     @staticmethod
@@ -478,7 +485,9 @@ class GCSBackend:
             if self.params.storage_class:
                 bucket.storage_class = self.params.storage_class
             try:
-                client.create_bucket(bucket, project=self._info().get("project_id"))
+                client.create_bucket(
+                    bucket, project=self._service_account_info().get("project_id")
+                )
             except (Conflict, Forbidden):
                 prefix = f"{self.params.path}/"
                 next(
