@@ -42,6 +42,11 @@ def tenacity_wait(mocker):
 
 
 @pytest.fixture(autouse=True)
+def mock_cloud_spec(mocker):
+    mocker.patch("ops.model.Model.get_cloud_spec")
+
+
+@pytest.fixture(autouse=True)
 def k8s_environment(monkeypatch):
     """Simulate a Kubernetes container environment by default."""
     monkeypatch.setenv("KUBERNETES_SERVICE_HOST", "127.0.0.1")

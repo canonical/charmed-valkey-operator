@@ -45,6 +45,11 @@ class ValkeyCharm(ops.CharmBase):
     def __init__(self, *args) -> None:
         super().__init__(*args)
         if os.environ.get("KUBERNETES_SERVICE_HOST"):
+            try:
+                self.model.get_cloud_spec()
+            except ops.ModelError:
+                logger.error("Application must be deployed with `trust` to get cloud spec")
+                raise
             self.substrate = Substrate.K8S
             self.workload = ValkeyK8sWorkload(container=self.unit.get_container(CONTAINER))
         else:

@@ -4,6 +4,7 @@
 
 from unittest.mock import patch
 
+import ops
 from ops import testing
 from pytest import raises
 
@@ -50,6 +51,25 @@ def test_install_on_k8s():
     ):
         ctx.run(ctx.on.install(), state_in)
         workload_install.assert_not_called()
+
+
+def test_install_on_k8s_untrusted(mocker):
+    mocker.patch("ops.model.Model.get_cloud_spec", side_effect=ops.ModelError("not trusted"))
+    ctx = testing.Context(ValkeyCharm)
+    relation = testing.PeerRelation(id=1, endpoint=PEER_RELATION)
+    status_peer_relation = testing.PeerRelation(id=2, endpoint=STATUS_PEERS_RELATION)
+    container = testing.Container(name=CONTAINER, can_connect=True)
+
+    state_in = testing.State(
+        model=testing.Model(name="my-k8s-model"),
+        leader=True,
+        relations={relation, status_peer_relation},
+        containers={container},
+    )
+
+    with raises(testing.errors.UncaughtCharmError) as e:
+        ctx.run(ctx.on.install(), state_in)
+    assert isinstance(e.value.__cause__, ops.ModelError)
 
 
 def test_install_failure(vm_environment):
