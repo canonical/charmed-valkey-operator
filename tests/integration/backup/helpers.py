@@ -11,14 +11,52 @@ import re
 
 import jubilant
 
-from literals import Substrate
-from tests.integration.helpers import APP_NAME, IMAGE_RESOURCE, are_apps_active_and_agents_idle
+from literals import CharmUsers, Substrate
+from tests.integration.helpers import (
+    APP_NAME,
+    IMAGE_RESOURCE,
+    are_apps_active_and_agents_idle,
+    exec_valkey_cli,
+    get_password,
+    get_primary_ip,
+)
 
 S3_INTEGRATOR_APP = "s3-integrator"
 S3_CREDS_SECRET = "s3-creds"
 AZURE_INTEGRATOR_APP = "azure-storage-integrator"
 AZURE_CREDS_SECRET = "azure-creds"
+GCS_INTEGRATOR_APP = "gcs-integrator"
+GCS_CREDS_SECRET = "gcs-creds"
 BACKUP_ID_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+
+
+def write_key(juju: jubilant.Juju, key: str, value: str) -> None:
+    """Write *key=value* to the Valkey primary via valkey-cli."""
+    password = get_password(juju)
+    primary_ip = get_primary_ip(juju, APP_NAME)
+    exec_valkey_cli(
+        primary_ip,
+        username=CharmUsers.VALKEY_ADMIN.value,
+        password=password,
+        command=f"SET {key} {value}",
+    )
+
+
+def read_key(juju: jubilant.Juju, unit_name: str, key: str) -> str | None:
+    """GET *key* from the named unit; returns None for missing keys."""
+    status = juju.status()
+    model_info = juju.show_model()
+    unit = status.apps[APP_NAME].units[unit_name]
+    # K8s: use pod IP; VM: use public address (mirrors get_cluster_addresses logic).
+    address = unit.address if model_info.type == "kubernetes" else unit.public_address
+    password = get_password(juju)
+    result = exec_valkey_cli(
+        address,
+        username=CharmUsers.VALKEY_ADMIN.value,
+        password=password,
+        command=f"GET {key}",
+    )
+    return result.stdout if result.stdout else None
 
 
 def deploy_and_relate_s3(
@@ -186,6 +224,74 @@ def deploy_and_relate_azure(
     juju.wait(
         lambda status: are_apps_active_and_agents_idle(
             status, APP_NAME, AZURE_INTEGRATOR_APP, idle_period=30
+        ),
+        timeout=1000,
+        delay=5,
+        successes=3,
+    )
+
+
+def deploy_and_relate_gcs(
+    juju: jubilant.Juju,
+    charm: str,
+    substrate: Substrate,
+    gcs: dict,
+    num_units: int = 3,
+) -> None:
+    """Deploy the local valkey charm + gcs-integrator, wire creds, and relate them.
+
+    Idempotent, like ``deploy_and_relate_azure``. The `gcs` fixture mints a
+    fresh path prefix per run, so remove `gcs-integrator` and the `gcs-creds`
+    secret between local runs, or backups land where the test does not look.
+    """
+    status = juju.status()
+
+    if GCS_INTEGRATOR_APP not in status.apps:
+        juju.deploy(GCS_INTEGRATOR_APP, channel="1/stable")
+        # The key goes in as a Juju secret (content key `secret-key`) that the
+        # integrator's `credentials` option points at.
+        creds = juju.add_secret(
+            name=GCS_CREDS_SECRET,
+            content={"secret-key": gcs["secret-key"]},
+        )
+        juju.grant_secret(identifier=creds, app=GCS_INTEGRATOR_APP)
+        juju.config(
+            GCS_INTEGRATOR_APP,
+            {
+                "credentials": creds,
+                "bucket": gcs["bucket"],
+                # The charm requires a path; the integrator defaults it to "".
+                "path": gcs["path"],
+            },
+        )
+
+    # Always deploy the local charm under test -- never a Charmhub revision.
+    if APP_NAME not in status.apps:
+        juju.deploy(
+            charm,
+            resources=IMAGE_RESOURCE if substrate == Substrate.K8S else None,
+            num_units=num_units,
+            trust=True,
+        )
+
+    juju.wait(
+        lambda status: are_apps_active_and_agents_idle(
+            status, APP_NAME, GCS_INTEGRATOR_APP, idle_period=30
+        ),
+        timeout=1000,
+        delay=5,
+        successes=3,
+    )
+
+    # Integrate only when the relation does not yet exist (a redeploy drops it).
+    try:
+        juju.integrate(APP_NAME, GCS_INTEGRATOR_APP)
+    except jubilant.CLIError as exc:
+        if "already exists" not in str(exc).lower():
+            raise
+    juju.wait(
+        lambda status: are_apps_active_and_agents_idle(
+            status, APP_NAME, GCS_INTEGRATOR_APP, idle_period=30
         ),
         timeout=1000,
         delay=5,

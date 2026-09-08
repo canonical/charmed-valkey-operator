@@ -4,7 +4,52 @@
 
 """Unit tests for the S3 backup feature."""
 
-from src.statuses import BackupStatuses
+import base64
+import io
+import json
+import logging
+import pathlib
+from dataclasses import replace
+from types import SimpleNamespace
+from unittest.mock import PropertyMock
+
+import pytest
+import yaml
+from botocore.exceptions import ClientError
+from ops import testing
+from pydantic import ValidationError
+
+# Flat imports for everything the charm dispatches on by class: the charm runs the
+# flat modules, and a `src.`-prefixed copy is a different class object.
+from common.exceptions import StorageBackendError, ValkeyBackupError
+from common.storage_backend import S3Backend
+from core.base_workload import TLSPaths, WorkloadBase
+from core.models import (
+    AzureStorageParameters,
+    GCSParameters,
+    PeerAppModel,
+    PeerUnitModel,
+    S3Parameters,
+    ValkeyCluster,
+    ValkeyServer,
+)
+from src.charm import ValkeyCharm
+from src.events.backup import _safe_error
+from src.literals import (
+    AZURE_HTTP_PROTOCOLS,
+    AZURE_HTTPS_PROTOCOLS,
+    AZURE_RELATION_NAME,
+    BACKUP_CA_FILENAME,
+    BACKUP_CREDENTIAL_FIELDS,
+    BACKUP_EXISTS_CODE,
+    DATA_STORAGE,
+    GCS_RELATION_NAME,
+    PEER_RELATION,
+    S3_RELATION_NAME,
+    STATUS_PEERS_RELATION,
+)
+from src.managers.backup import BackupManager
+from src.statuses import BackupStatuses, CharmStatuses
 
 
 def test_backup_statuses_present():
@@ -15,8 +60,6 @@ def test_backup_statuses_present():
 
 
 def test_peer_app_model_has_s3_credentials_field():
-    from src.core.models import PeerAppModel
-
     fields = PeerAppModel.model_fields
     assert "s3_credentials" in fields
     assert fields["s3_credentials"].default is None
@@ -24,10 +67,6 @@ def test_peer_app_model_has_s3_credentials_field():
 
 def test_cluster_s3_credentials_parses_envelope_and_defaults_none(mocker):
     """The stored envelope parses back to S3Parameters; unset reads as None."""
-    import json
-
-    from src.core.models import S3Parameters, ValkeyCluster
-
     cluster = ValkeyCluster.__new__(ValkeyCluster)
 
     cluster.model = mocker.MagicMock()
@@ -54,15 +93,11 @@ def test_cluster_s3_credentials_parses_envelope_and_defaults_none(mocker):
 
 
 def test_peer_unit_model_has_backup_id_field():
-    from src.core.models import PeerUnitModel
-
     assert "backup_id" in PeerUnitModel.model_fields
     assert PeerUnitModel.model_fields["backup_id"].default == ""
 
 
 def test_valkey_server_is_backup_in_progress_reflects_model_field():
-    from src.core.models import PeerUnitModel, ValkeyServer
-
     server = ValkeyServer.__new__(ValkeyServer)
     server.model = PeerUnitModel(backup_id="2026-05-13T10:00:00Z")
     assert server.is_backup_in_progress is True
@@ -75,11 +110,6 @@ def test_valkey_server_is_backup_in_progress_reflects_model_field():
 
 
 def test_cluster_state_exposes_s3_relation():
-    from ops import testing
-
-    from src.charm import ValkeyCharm
-    from src.literals import PEER_RELATION, S3_RELATION_NAME, STATUS_PEERS_RELATION
-
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer = testing.PeerRelation(id=1, endpoint=PEER_RELATION)
     status_peer = testing.PeerRelation(id=2, endpoint=STATUS_PEERS_RELATION)
@@ -109,13 +139,6 @@ def test_active_backup_credentials_follows_the_relation(mocker):
     ``s3_credentials`` is an ``ExtraSecretStr`` routed through a Juju secret, so
     it's patched at the property rather than forged into the databag.
     """
-    from unittest.mock import PropertyMock
-
-    from ops import testing
-
-    from src.charm import ValkeyCharm
-    from src.literals import PEER_RELATION, S3_RELATION_NAME, STATUS_PEERS_RELATION
-
     stored = _s3_params()
     mocker.patch(
         "core.models.ValkeyCluster.s3_credentials",
@@ -150,11 +173,9 @@ def test_active_backup_credentials_follows_the_relation(mocker):
 
 def test_backup_credential_registry_maps_relations_to_databag_fields():
     """Adding a backend is one registry entry: its relation and where creds land."""
-    from src.core.models import PeerAppModel
-    from src.literals import AZURE_RELATION_NAME, BACKUP_CREDENTIAL_FIELDS, S3_RELATION_NAME
-
     assert BACKUP_CREDENTIAL_FIELDS[S3_RELATION_NAME] == "s3_credentials"
     assert BACKUP_CREDENTIAL_FIELDS[AZURE_RELATION_NAME] == "azure_credentials"
+    assert BACKUP_CREDENTIAL_FIELDS[GCS_RELATION_NAME] == "gcs_credentials"
     # Every registered field must exist on the app databag model, or the leader
     # would silently write credentials nothing reads back.
     for field in BACKUP_CREDENTIAL_FIELDS.values():
@@ -164,24 +185,15 @@ def test_backup_credential_registry_maps_relations_to_databag_fields():
 def test_backup_relations_and_conflict_follow_the_registry():
     """Relation discovery and the conflict check are driven by the registry alone.
 
-    Exercised with the two registered backends, so it also pins the mutual
+    Exercised with the three registered backends, so it also pins the mutual
     exclusion the charm enforces: relate exactly one storage integrator.
     """
-    from ops import testing
-
-    from src.charm import ValkeyCharm
-    from src.literals import (
-        AZURE_RELATION_NAME,
-        PEER_RELATION,
-        S3_RELATION_NAME,
-        STATUS_PEERS_RELATION,
-    )
-
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer = testing.PeerRelation(id=1, endpoint=PEER_RELATION)
     status_peer = testing.PeerRelation(id=2, endpoint=STATUS_PEERS_RELATION)
     s3_rel = testing.Relation(id=3, endpoint=S3_RELATION_NAME, interface="s3")
     azure_rel = testing.Relation(id=4, endpoint=AZURE_RELATION_NAME, interface="azure_storage")
+    gcs_rel = testing.Relation(id=5, endpoint=GCS_RELATION_NAME, interface="gcs")
     common = {
         "model": testing.Model(name="m", type="lxd"),
         "leader": True,
@@ -205,6 +217,17 @@ def test_backup_relations_and_conflict_follow_the_registry():
         # Nothing can pick a backend, so no credentials are active.
         assert manager.charm.state.active_backup_credentials is None
 
+    third = testing.State(relations={peer, status_peer, gcs_rel}, **common)
+    with ctx(ctx.on.update_status(), third) as manager:
+        assert len(manager.charm.state.backup_relations) == 1
+        assert manager.charm.state.backup_backends_conflict is False
+
+    all_three = testing.State(relations={peer, status_peer, s3_rel, azure_rel, gcs_rel}, **common)
+    with ctx(ctx.on.update_status(), all_three) as manager:
+        assert len(manager.charm.state.backup_relations) == 3
+        assert manager.charm.state.backup_backends_conflict is True
+        assert manager.charm.state.active_backup_credentials is None
+
 
 def test_backup_ca_path_is_charm_local_not_workload_tls_dir(mocker, tmp_path):
     """The S3 CA path is charm-process-local, never a workload TLS path.
@@ -213,10 +236,6 @@ def test_backup_ca_path_is_charm_local_not_workload_tls_dir(mocker, tmp_path):
     dir (``charm.charm_dir``), never in the workload-container ``tls_paths``
     and never on the workload object at all.
     """
-    from src.core.base_workload import TLSPaths, WorkloadBase
-    from src.literals import BACKUP_CA_FILENAME
-    from src.managers.backup import BackupManager
-
     # backup CA must be neither a workload (container) TLS path nor any
     # attribute of the workload -- it belongs to the charm-process side.
     assert not hasattr(TLSPaths, "backup_ca")
@@ -229,9 +248,6 @@ def test_backup_ca_path_is_charm_local_not_workload_tls_dir(mocker, tmp_path):
 
 
 def test_backup_manager_store_tls_ca_chain_writes_charm_local_file(mocker, tmp_path):
-    from src.literals import BACKUP_CA_FILENAME
-    from src.managers.backup import BackupManager
-
     state = mocker.MagicMock()
     state.charm.charm_dir = tmp_path
     workload = mocker.MagicMock()
@@ -249,9 +265,6 @@ def test_backup_manager_store_tls_ca_chain_writes_charm_local_file(mocker, tmp_p
 
 
 def test_backup_manager_store_tls_ca_chain_noop_without_chain(mocker, tmp_path):
-    from src.literals import BACKUP_CA_FILENAME
-    from src.managers.backup import BackupManager
-
     state = mocker.MagicMock()
     state.charm.charm_dir = tmp_path
     mgr = BackupManager(state=state, workload=mocker.MagicMock())
@@ -260,9 +273,6 @@ def test_backup_manager_store_tls_ca_chain_noop_without_chain(mocker, tmp_path):
 
 
 def test_backup_manager_store_tls_ca_chain_rejects_non_list(mocker, tmp_path):
-    from src.literals import BACKUP_CA_FILENAME
-    from src.managers.backup import BackupManager
-
     state = mocker.MagicMock()
     state.charm.charm_dir = tmp_path
     mgr = BackupManager(state=state, workload=mocker.MagicMock())
@@ -272,9 +282,6 @@ def test_backup_manager_store_tls_ca_chain_rejects_non_list(mocker, tmp_path):
 
 
 def test_backup_manager_store_tls_ca_chain_rejects_non_pem_items(mocker, tmp_path):
-    from src.literals import BACKUP_CA_FILENAME
-    from src.managers.backup import BackupManager
-
     state = mocker.MagicMock()
     state.charm.charm_dir = tmp_path
     mgr = BackupManager(state=state, workload=mocker.MagicMock())
@@ -286,8 +293,6 @@ def test_backup_manager_store_tls_ca_chain_rejects_non_pem_items(mocker, tmp_pat
 
 def test_ensure_container_delegates_to_the_backend(mocker):
     """The manager just asks the backend; the create semantics are the backend's."""
-    from src.managers.backup import BackupManager
-
     backend = _fake_built_backend(mocker)
 
     BackupManager(state=mocker.MagicMock(), workload=mocker.MagicMock()).ensure_container(
@@ -298,11 +303,6 @@ def test_ensure_container_delegates_to_the_backend(mocker):
 
 def test_ensure_container_wraps_backend_error_and_keeps_the_code(mocker):
     """Bucket setup failures reach the credentials handler as a backup error."""
-    import pytest
-
-    from common.exceptions import StorageBackendError, ValkeyBackupError
-    from src.managers.backup import BackupManager
-
     backend = _fake_built_backend(mocker)
     backend.ensure_container.side_effect = StorageBackendError("x", safe_code="AccessDenied")
 
@@ -315,8 +315,6 @@ def test_ensure_container_wraps_backend_error_and_keeps_the_code(mocker):
 
 def test_list_backups_keeps_only_backup_ids_newest_first(mocker):
     """The manager filters the backend's object ids and orders them, newest first."""
-    from src.managers.backup import BackupManager
-
     state = mocker.MagicMock()
     state.active_backup_credentials = _s3_params(path="valkey")
     backend = _fake_backend(mocker)
@@ -339,11 +337,6 @@ def test_list_backups_keeps_only_backup_ids_newest_first(mocker):
 
 def test_list_backups_wraps_backend_error_and_keeps_the_code(mocker):
     """A backend failure surfaces as ValkeyBackupError, code intact for the action."""
-    import pytest
-
-    from common.exceptions import StorageBackendError, ValkeyBackupError
-    from src.managers.backup import BackupManager
-
     state = mocker.MagicMock()
     state.active_backup_credentials = _s3_params(path="p")
     backend = _fake_backend(mocker)
@@ -356,11 +349,6 @@ def test_list_backups_wraps_backend_error_and_keeps_the_code(mocker):
 
 def test_list_backups_without_credentials_raises(mocker):
     """No related backend (or nothing stored yet) is an error, not an empty list."""
-    import pytest
-
-    from common.exceptions import ValkeyBackupError
-    from src.managers.backup import BackupManager
-
     state = mocker.MagicMock()
     state.active_backup_credentials = None
 
@@ -369,8 +357,6 @@ def test_list_backups_without_credentials_raises(mocker):
 
 
 def test_format_backup_list_renders_table():
-    from src.managers.backup import BackupManager
-
     formatted = BackupManager.format_backup_list(["2026-05-13T10:00:00Z"])
     assert "backup-id" in formatted
     assert "backup-status" in formatted
@@ -379,20 +365,11 @@ def test_format_backup_list_renders_table():
 
 
 def test_format_backup_list_empty():
-    from src.managers.backup import BackupManager
-
     assert BackupManager.format_backup_list([]) == "No backups found."
 
 
 def _s3_params(**overrides):
-    """Build a valid S3Parameters, overriding individual fields by name.
-
-    Flat import: src/ imports are flat, so `core.models.S3Parameters` is the class
-    production builds and isinstance-checks against -- the `src.`-prefixed copy is
-    a different class object and would miss every isinstance dispatch.
-    """
-    from core.models import S3Parameters
-
+    """Build a valid S3Parameters, overriding individual fields by name."""
     base = {
         "bucket": "b",
         "endpoint": "https://e",
@@ -410,8 +387,6 @@ def _fake_backend(mocker):
     Manager tests assert what the manager asks of the backend; the SDK wiring
     behind the Protocol is covered in test_storage_backend.py.
     """
-    from src.managers.backup import BackupManager
-
     backend = mocker.MagicMock()
     mocker.patch.object(BackupManager, "storage_backend", backend)
     return backend
@@ -448,9 +423,6 @@ def _drain(reader) -> None:
 
 
 def test_create_backup_success_sets_lock_streams_and_clears(mocker):
-    import io
-
-    from src.managers.backup import BackupManager
 
     state = _make_state(mocker)
     workload = mocker.MagicMock()
@@ -480,12 +452,6 @@ def test_create_backup_success_sets_lock_streams_and_clears(mocker):
 
 
 def test_create_backup_rejects_empty_or_non_rdb_stream(mocker):
-    import io
-
-    import pytest
-
-    from common.exceptions import ValkeyBackupError
-    from src.managers.backup import BackupManager
 
     fixed_now = mocker.patch("src.managers.backup.datetime")
     fixed_now.now.return_value.strftime.return_value = "2026-05-13T10:00:00Z"
@@ -511,10 +477,6 @@ def test_create_backup_rejects_empty_or_non_rdb_stream(mocker):
 
 
 def test_create_backup_deletes_object_and_raises_when_cli_fails(mocker):
-    import pytest
-
-    from common.exceptions import ValkeyBackupError
-    from src.managers.backup import BackupManager
 
     state = _make_state(mocker)
     workload = mocker.MagicMock()
@@ -537,12 +499,6 @@ def test_create_backup_deletes_object_and_raises_when_cli_fails(mocker):
 
 def test_create_backup_refuses_to_overwrite_an_existing_backup(mocker):
     """An object already under this id is never replaced -- on any backend."""
-    import pytest
-
-    from common.exceptions import ValkeyBackupError
-    from literals import BACKUP_EXISTS_CODE
-    from src.managers.backup import BackupManager
-
     state = _make_state(mocker)
     workload = mocker.MagicMock()
     backend = _fake_backend(mocker)
@@ -563,11 +519,6 @@ def test_create_backup_refuses_to_overwrite_an_existing_backup(mocker):
 
 def test_create_backup_wraps_a_failing_existence_probe(mocker):
     """A backend error on the pre-flight listing fails the action, safe code intact."""
-    import pytest
-
-    from common.exceptions import StorageBackendError, ValkeyBackupError
-    from src.managers.backup import BackupManager
-
     state = _make_state(mocker)
     workload = mocker.MagicMock()
     backend = _fake_backend(mocker)
@@ -583,11 +534,6 @@ def test_create_backup_wraps_a_failing_existence_probe(mocker):
 
 def test_create_backup_refuses_to_run_without_credentials(mocker):
     """No related backup backend: fail before touching valkey or the databag lock."""
-    import pytest
-
-    from common.exceptions import ValkeyBackupError
-    from src.managers.backup import BackupManager
-
     state = mocker.MagicMock()
     state.active_backup_credentials = None
     workload = mocker.MagicMock()
@@ -599,9 +545,6 @@ def test_create_backup_refuses_to_run_without_credentials(mocker):
 
 
 def test_get_statuses_idle(mocker):
-    from src.managers.backup import BackupManager
-    from src.statuses import CharmStatuses
-
     state = mocker.MagicMock()
     state.statuses.get.return_value.root = []
     state.unit_server.is_backup_in_progress = False
@@ -613,9 +556,6 @@ def test_get_statuses_idle(mocker):
 
 
 def test_get_statuses_backup_in_progress_unit_scope(mocker):
-    from src.managers.backup import BackupManager
-    from src.statuses import BackupStatuses
-
     state = mocker.MagicMock()
     state.statuses.get.return_value.root = []
     state.unit_server.is_backup_in_progress = True
@@ -626,129 +566,6 @@ def test_get_statuses_backup_in_progress_unit_scope(mocker):
     assert BackupStatuses.BACKUP_IN_PROGRESS.value in statuses
 
 
-def _blocking_evt(mocker, *, relation=True, credentials=True, alive=True, conflict=False):
-    from src.events.backup import BackupEvents
-
-    charm = mocker.MagicMock()
-    charm.state.s3_relation = mocker.MagicMock() if relation else None
-    charm.state.backup_relations = [mocker.MagicMock()] if relation else []
-    charm.state.backup_backends_conflict = conflict
-    charm.state.active_backup_credentials = (
-        None if conflict else ({"bucket": "b"} if credentials else None)
-    )
-    charm.workload.alive.return_value = alive
-    charm.state.unit_server.is_backup_in_progress = False
-    charm.state.cluster.is_restore_in_progress = False
-    evt = BackupEvents.__new__(BackupEvents)
-    evt.charm = charm
-    return evt
-
-
-def test_blocking_reason_no_relation(mocker):
-    assert "No backup storage relation" in _blocking_evt(mocker, relation=False)._blocking_reason()
-
-
-def test_blocking_reason_no_credentials(mocker):
-    assert "credentials" in _blocking_evt(mocker, credentials=False)._blocking_reason().lower()
-
-
-def test_blocking_reason_rejects_a_backend_conflict(mocker):
-    """Two related integrators: refuse rather than pick one."""
-    reason = _blocking_evt(mocker, conflict=True)._blocking_reason()
-    assert "exactly one" in reason
-
-
-def test_blocking_reason_names_the_registered_relations(mocker):
-    """The no-relation hint is generated, so a new backend appears in it for free."""
-    from src.literals import S3_RELATION_NAME
-
-    reason = _blocking_evt(mocker, relation=False)._blocking_reason()
-    assert S3_RELATION_NAME in reason
-
-
-def test_restore_and_backup_guards_share_the_storage_checks(mocker):
-    """Both actions gate on backup storage the same way, from one implementation."""
-    evt = _blocking_evt(mocker, conflict=True)
-    evt.charm.unit.is_leader.return_value = True
-    assert evt._blocking_reason() == evt._restore_blocking_reason("2026-05-13T10:00:00Z")
-
-
-def test_blocking_reason_workload_down(mocker):
-    assert "not running" in _blocking_evt(mocker, alive=False)._blocking_reason()
-
-
-def test_blocking_reason_none_when_all_ok(mocker):
-    assert _blocking_evt(mocker)._blocking_reason() is None
-
-
-def test_blocking_reason_in_progress_check_is_toggleable(mocker):
-    # The default checks for a running backup (create-backup); list-backups
-    # passes check_running_operations=False because it is read-only.
-    evt = _blocking_evt(mocker)
-    evt.charm.state.unit_server.is_backup_in_progress = True
-    assert "already in progress" in evt._blocking_reason()
-    assert evt._blocking_reason(check_running_operations=False) is None
-
-
-def test_on_s3_credentials_changed_stores_ca_on_all_units(mocker):
-    from src.events.backup import BackupEvents
-
-    charm = mocker.MagicMock()
-    charm.unit.is_leader.return_value = False
-    charm.state.peer_relation = mocker.MagicMock()
-    charm.backup_manager = mocker.MagicMock()
-
-    evt = BackupEvents.__new__(BackupEvents)
-    evt.charm = charm
-    evt.s3_requirer = mocker.MagicMock()
-    evt.s3_requirer.get_storage_connection_info.return_value = {
-        "bucket": "b",
-        "endpoint": "https://e/",
-        "path": "/p/",
-        "access-key": "AK",
-        "secret-key": "SK",
-        "tls-ca-chain": ["-----CERT-----"],
-    }
-
-    evt._on_s3_credentials_changed(mocker.MagicMock())
-    charm.backup_manager.store_tls_ca_chain.assert_called_once()
-    charm.state.cluster.update.assert_not_called()
-
-
-def test_on_s3_credentials_changed_leader_writes_databag(mocker):
-    import json
-
-    from src.events.backup import BackupEvents
-
-    charm = mocker.MagicMock()
-    charm.unit.is_leader.return_value = True
-    charm.state.peer_relation = mocker.MagicMock()
-    charm.state.backup_backends_conflict = False
-
-    evt = BackupEvents.__new__(BackupEvents)
-    evt.charm = charm
-    evt.s3_requirer = mocker.MagicMock()
-    evt.s3_requirer.get_storage_connection_info.return_value = {
-        "bucket": " b ",
-        "endpoint": "https://e/",
-        "path": "/p/",
-        "access-key": "AK",
-        "secret-key": "SK",
-    }
-    # No backup/restore in flight, so the credentials change is applied, not deferred.
-    charm.state.is_backup_in_progress_any = False
-    charm.state.cluster.is_restore_in_progress = False
-
-    evt._on_s3_credentials_changed(mocker.MagicMock())
-    charm.backup_manager.ensure_container.assert_called_once()
-    args, _ = charm.state.cluster.update.call_args
-    payload = args[0]
-    creds = json.loads(payload["s3_credentials"])
-    assert creds["bucket"] == "b"
-    assert creds["endpoint"] == "https://e"
-    assert creds["path"] == "p"
-
-
 def test_safe_error_surfaces_s3_code_only(mocker):
     """Only the structured, backend-neutral error code reaches the action result.
 
@@ -757,19 +574,6 @@ def test_safe_error_surfaces_s3_code_only(mocker):
     the chain itself would keep passing after one of them stopped forwarding the
     code.
     """
-    import pytest
-    from botocore.exceptions import ClientError
-
-    # Flat import: the manager raises `common.exceptions.ValkeyBackupError`, a
-    # different class object from the `src.`-prefixed one, so pytest.raises must
-    # be given the flat one to catch it.
-    # ...and flat for S3Backend too: src/ imports are flat, so the class the
-    # manager actually instantiates is `common.storage_backend.S3Backend`.
-    from common.exceptions import ValkeyBackupError
-    from common.storage_backend import S3Backend
-    from src.events.backup import _safe_error
-    from src.managers.backup import BackupManager
-
     state = mocker.MagicMock()
     state.active_backup_credentials = _s3_params(path="p")
     fake_bucket = mocker.MagicMock()
@@ -795,295 +599,13 @@ def test_safe_error_surfaces_s3_code_only(mocker):
 
 def test_safe_error_generic_for_non_client_errors():
     """Errors that are not S3 ClientErrors collapse to a generic message."""
-    from src.common.exceptions import ValkeyBackupError
-    from src.events.backup import _safe_error
-
     wrapped = ValkeyBackupError("valkey-cli --rdb exited 1: connection refused 10.1.2.3:6379")
     msg = _safe_error(wrapped)
     assert "10.1.2.3" not in msg
     assert "debug-log" in msg
 
 
-def test_on_s3_credentials_changed_rejects_path_that_strips_to_empty(mocker):
-    """path='/' normalises to '' and must be rejected, not stored."""
-    from src.events.backup import BackupEvents
-
-    charm = mocker.MagicMock()
-    charm.unit.is_leader.return_value = True
-    charm.state.peer_relation = mocker.MagicMock()
-    charm.state.backup_backends_conflict = False
-
-    evt = BackupEvents.__new__(BackupEvents)
-    evt.charm = charm
-    evt.s3_requirer = mocker.MagicMock()
-    evt.s3_requirer.get_storage_connection_info.return_value = {
-        "bucket": "b",
-        "endpoint": "https://e",
-        "path": "/",
-        "access-key": "AK",
-        "secret-key": "SK",
-    }
-
-    evt._on_s3_credentials_changed(mocker.MagicMock())
-    charm.backup_manager.ensure_container.assert_not_called()
-    charm.state.cluster.update.assert_not_called()
-
-
-def test_on_s3_credentials_changed_skips_when_envelope_unchanged(mocker):
-    """An unchanged envelope must not trigger another ensure_container call."""
-    from src.core.models import S3Parameters
-    from src.events.backup import BackupEvents
-
-    envelope = {
-        "bucket": "b",
-        "endpoint": "https://e",
-        "path": "p",
-        "access-key": "AK",
-        "secret-key": "SK",
-    }
-    charm = mocker.MagicMock()
-    charm.unit.is_leader.return_value = True
-    charm.state.peer_relation = mocker.MagicMock()
-    charm.state.backup_backends_conflict = False
-    # already stored: the parsed envelope the handler will compare against
-    charm.state.cluster.s3_credentials = S3Parameters.model_validate(dict(envelope))
-
-    evt = BackupEvents.__new__(BackupEvents)
-    evt.charm = charm
-    evt.s3_requirer = mocker.MagicMock()
-    evt.s3_requirer.get_storage_connection_info.return_value = dict(envelope)
-
-    evt._on_s3_credentials_changed(mocker.MagicMock())
-    charm.backup_manager.ensure_container.assert_not_called()
-    charm.state.cluster.update.assert_not_called()
-
-
-def test_on_s3_credentials_changed_missing_params_skips_databag(mocker):
-    from src.events.backup import BackupEvents
-
-    charm = mocker.MagicMock()
-    charm.unit.is_leader.return_value = True
-    charm.state.peer_relation = mocker.MagicMock()
-    charm.state.backup_backends_conflict = False
-
-    evt = BackupEvents.__new__(BackupEvents)
-    evt.charm = charm
-    evt.s3_requirer = mocker.MagicMock()
-    evt.s3_requirer.get_storage_connection_info.return_value = {"bucket": "b"}
-
-    evt._on_s3_credentials_changed(mocker.MagicMock())
-    charm.state.cluster.update.assert_not_called()
-    charm.backup_manager.ensure_container.assert_not_called()
-
-
-def test_credentials_are_not_stored_while_backends_conflict(mocker):
-    """With two integrators related there is no answer to "which backend"; store nothing."""
-    from src.events.backup import BackupEvents
-
-    evt = BackupEvents.__new__(BackupEvents)
-    evt.charm = mocker.MagicMock()
-    evt.charm.unit.is_leader.return_value = True
-    evt.charm.state.backup_backends_conflict = True
-
-    evt._store_credentials({"bucket": "b"}, mocker.MagicMock(), "s3_credentials", mocker.Mock())
-
-    evt.charm.state.cluster.update.assert_not_called()
-    evt.charm.backup_manager.ensure_container.assert_not_called()
-
-
-def test_credentials_gone_re_drives_the_other_backends(mocker):
-    """Removing one integrator clears the conflict, so the others get another go.
-
-    Otherwise a still-related backend would sit unconfigured until some unrelated
-    event happened to re-fire its handler.
-    """
-    from src.events.backup import BackupEvents
-
-    evt = BackupEvents.__new__(BackupEvents)
-    evt.charm = mocker.MagicMock()
-    other = mocker.Mock()
-    evt._credentials_changed_handlers = {"s3-credentials": mocker.Mock(), "other": other}
-
-    evt._reconcile_other_backends(mocker.Mock(), exclude="s3-credentials")
-
-    other.assert_called_once()
-    evt._credentials_changed_handlers["s3-credentials"].assert_not_called()
-
-
-def test_on_s3_credentials_gone_defers_during_backup(mocker):
-    from src.events.backup import BackupEvents
-
-    charm = mocker.MagicMock()
-    charm.state.unit_server.is_backup_in_progress = True
-
-    evt = BackupEvents.__new__(BackupEvents)
-    evt.charm = charm
-    event = mocker.MagicMock()
-    evt._on_s3_credentials_gone(event)
-    event.defer.assert_called_once()
-    charm.backup_manager.remove_tls_ca_chain.assert_not_called()
-
-
-def test_on_s3_credentials_gone_removes_ca_and_clears_databag(mocker):
-    from src.events.backup import BackupEvents
-
-    charm = mocker.MagicMock()
-    charm.state.is_backup_in_progress_any = False
-    charm.state.cluster.is_restore_in_progress = False
-    charm.unit.is_leader.return_value = True
-
-    evt = BackupEvents.__new__(BackupEvents)
-    evt.charm = charm
-    evt._credentials_changed_handlers = {}
-    evt._on_s3_credentials_gone(mocker.MagicMock())
-    charm.backup_manager.remove_tls_ca_chain.assert_called_once_with()
-    charm.state.cluster.update.assert_called_once_with({"s3_credentials": ""})
-
-
-def test_on_create_backup_action_happy(mocker):
-    from src.events.backup import BackupEvents
-
-    charm = mocker.MagicMock()
-    charm.backup_manager.create_backup.return_value = "2026-05-13T10:00:00Z"
-    charm.state.unit_server.is_backup_in_progress = False
-    evt = BackupEvents.__new__(BackupEvents)
-    evt.charm = charm
-    mocker.patch.object(evt, "_blocking_reason", return_value=None)
-
-    event = mocker.MagicMock()
-    evt._on_create_backup_action(event)
-    event.set_results.assert_called_with({"backup-id": "2026-05-13T10:00:00Z"})
-    event.fail.assert_not_called()
-
-
-def test_on_create_backup_action_audit_logs_invocation(mocker, caplog):
-    """Each create-backup invocation is audit-logged with its action id.
-
-    No unit name in the message -- Juju already prefixes every log line with
-    the unit that emitted it.
-    """
-    import logging
-
-    from src.events.backup import BackupEvents
-
-    charm = mocker.MagicMock()
-    charm.unit.name = "valkey/2"
-    charm.backup_manager.create_backup.return_value = "2026-05-13T10:00:00Z"
-    charm.state.unit_server.is_backup_in_progress = False
-    evt = BackupEvents.__new__(BackupEvents)
-    evt.charm = charm
-    mocker.patch.object(evt, "_blocking_reason", return_value=None)
-
-    event = mocker.MagicMock()
-    event.id = "42"
-    with caplog.at_level(logging.INFO):
-        evt._on_create_backup_action(event)
-
-    audit = [r.message for r in caplog.records if "audit: create-backup" in r.message]
-    assert audit, "expected an audit log line for the action invocation"
-    assert "action_id=42" in audit[0]
-    assert "unit=" not in audit[0]
-
-
-def test_on_create_backup_action_fails_when_guard_blocks(mocker):
-    from src.events.backup import BackupEvents
-
-    charm = mocker.MagicMock()
-    evt = BackupEvents.__new__(BackupEvents)
-    evt.charm = charm
-    mocker.patch.object(evt, "_blocking_reason", return_value="No S3 relation.")
-
-    event = mocker.MagicMock()
-    evt._on_create_backup_action(event)
-    event.fail.assert_called_once_with("No S3 relation.")
-    charm.backup_manager.create_backup.assert_not_called()
-
-
-def test_on_create_backup_action_handles_backup_error(mocker):
-    from common.exceptions import ValkeyBackupError
-    from src.events.backup import BackupEvents
-
-    charm = mocker.MagicMock()
-    charm.backup_manager.create_backup.side_effect = ValkeyBackupError("boom")
-    charm.state.unit_server.is_backup_in_progress = False
-    evt = BackupEvents.__new__(BackupEvents)
-    evt.charm = charm
-    mocker.patch.object(evt, "_blocking_reason", return_value=None)
-
-    event = mocker.MagicMock()
-    evt._on_create_backup_action(event)
-    event.fail.assert_called_once()
-
-
-def test_on_list_backups_action_returns_table(mocker):
-    from src.events.backup import BackupEvents
-
-    charm = mocker.MagicMock()
-    charm.backup_manager.list_backups.return_value = ["2026-05-13T10:00:00Z"]
-    charm.backup_manager.format_backup_list.return_value = "table"
-    evt = BackupEvents.__new__(BackupEvents)
-    evt.charm = charm
-    mocker.patch.object(evt, "_blocking_reason", return_value=None)
-
-    event = mocker.MagicMock()
-    event.params = {"output": "table"}
-    evt._on_list_backups_action(event)
-    event.set_results.assert_called_with({"backups": "table"})
-
-
-def test_on_list_backups_action_returns_json(mocker):
-    import json
-
-    from src.events.backup import BackupEvents
-
-    charm = mocker.MagicMock()
-    charm.backup_manager.list_backups.return_value = [
-        "2026-05-14T10:00:00Z",
-        "2026-05-13T10:00:00Z",
-    ]
-    evt = BackupEvents.__new__(BackupEvents)
-    evt.charm = charm
-    mocker.patch.object(evt, "_blocking_reason", return_value=None)
-
-    event = mocker.MagicMock()
-    event.params = {"output": "json"}
-    evt._on_list_backups_action(event)
-    _, kwargs_or_args = event.set_results.call_args
-    payload = event.set_results.call_args.args[0]["backups"]
-    assert json.loads(payload) == [
-        {"backup-id": "2026-05-14T10:00:00Z", "backup-status": "finished"},
-        {"backup-id": "2026-05-13T10:00:00Z", "backup-status": "finished"},
-    ]
-    # The text formatter is not used for JSON output.
-    charm.backup_manager.format_backup_list.assert_not_called()
-
-
-def test_on_list_backups_action_rejects_invalid_format(mocker):
-    from src.events.backup import BackupEvents
-
-    charm = mocker.MagicMock()
-    evt = BackupEvents.__new__(BackupEvents)
-    evt.charm = charm
-
-    event = mocker.MagicMock()
-    event.params = {"output": "yaml"}
-    evt._on_list_backups_action(event)
-    event.fail.assert_called_once()
-    assert "invalid output format" in event.fail.call_args[0][0]
-    charm.backup_manager.list_backups.assert_not_called()
-
-
 def test_storage_detaching_refuses_during_backup():
-    import pytest
-    from ops import testing
-
-    from src.charm import ValkeyCharm
-    from src.literals import (
-        DATA_STORAGE,
-        PEER_RELATION,
-        STATUS_PEERS_RELATION,
-    )
-
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer = testing.PeerRelation(
         id=1,
@@ -1108,11 +630,6 @@ def test_storage_detaching_refuses_during_backup():
 
 
 def test_charm_constructs_backup_manager_and_events():
-    from ops import testing
-
-    from src.charm import ValkeyCharm
-    from src.literals import PEER_RELATION, STATUS_PEERS_RELATION
-
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer = testing.PeerRelation(id=1, endpoint=PEER_RELATION)
     status_peer = testing.PeerRelation(id=2, endpoint=STATUS_PEERS_RELATION)
@@ -1127,97 +644,7 @@ def test_charm_constructs_backup_manager_and_events():
         assert manager.charm.backup_events is not None
 
 
-def test_on_list_backups_action_runs_while_a_backup_is_in_progress(mocker):
-    """list-backups is read-only.
-
-    A backup running on the unit must not block it (the in-progress check
-    is create-backup only).
-    """
-    from src.events.backup import BackupEvents
-
-    charm = mocker.MagicMock()
-    charm.state.s3_relation = mocker.MagicMock()
-    charm.state.backup_relations = [mocker.MagicMock()]
-    charm.state.backup_backends_conflict = False
-    charm.state.active_backup_credentials = {"bucket": "b"}
-    charm.workload.alive.return_value = True
-    charm.state.unit_server.is_backup_in_progress = True  # backup running here
-    charm.backup_manager.list_backups.return_value = []
-    charm.backup_manager.format_backup_list.return_value = "No backups found."
-    evt = BackupEvents.__new__(BackupEvents)
-    evt.charm = charm
-
-    event = mocker.MagicMock()
-    event.params = {}  # default output format (table)
-    evt._on_list_backups_action(event)
-    event.fail.assert_not_called()
-    charm.backup_manager.list_backups.assert_called_once()
-
-
-def test_on_s3_credentials_gone_non_leader_does_not_clear_databag(mocker):
-    from src.events.backup import BackupEvents
-
-    charm = mocker.MagicMock()
-    charm.state.is_backup_in_progress_any = False
-    charm.state.cluster.is_restore_in_progress = False
-    charm.unit.is_leader.return_value = False
-
-    evt = BackupEvents.__new__(BackupEvents)
-    evt.charm = charm
-    evt._credentials_changed_handlers = {}
-    evt._on_s3_credentials_gone(mocker.MagicMock())
-    charm.backup_manager.remove_tls_ca_chain.assert_called_once()
-    charm.state.cluster.update.assert_not_called()
-
-
-def test_on_s3_credentials_changed_defers_without_peer_relation(mocker):
-    from src.events.backup import BackupEvents
-
-    charm = mocker.MagicMock()
-    charm.unit.is_leader.return_value = True
-    charm.state.peer_relation = None
-
-    evt = BackupEvents.__new__(BackupEvents)
-    evt.charm = charm
-    evt.s3_requirer = mocker.MagicMock()
-    evt.s3_requirer.get_storage_connection_info.return_value = {
-        "bucket": "b",
-        "endpoint": "e",
-        "path": "p",
-        "access-key": "AK",
-        "secret-key": "SK",
-    }
-
-    event = mocker.MagicMock()
-    evt._on_s3_credentials_changed(event)
-    event.defer.assert_called_once()
-
-
-def test_on_create_backup_action_rejected_when_backup_already_running(mocker):
-    """The in-progress check lives in _blocking_reason (default-on for create)."""
-    from src.events.backup import BackupEvents
-
-    charm = mocker.MagicMock()
-    charm.state.s3_relation = mocker.MagicMock()
-    charm.state.backup_relations = [mocker.MagicMock()]
-    charm.state.backup_backends_conflict = False
-    charm.state.active_backup_credentials = {"bucket": "b"}
-    charm.workload.alive.return_value = True
-    charm.state.unit_server.is_backup_in_progress = True
-    evt = BackupEvents.__new__(BackupEvents)
-    evt.charm = charm
-
-    event = mocker.MagicMock()
-    evt._on_create_backup_action(event)
-    event.fail.assert_called_once()
-    assert "already in progress" in event.fail.call_args[0][0]
-    charm.backup_manager.create_backup.assert_not_called()
-
-
 def test_get_statuses_credentials_missing(mocker):
-    from src.managers.backup import BackupManager
-    from src.statuses import BackupStatuses
-
     state = mocker.MagicMock()
     state.statuses.get.return_value.root = []
     state.unit_server.is_backup_in_progress = False
@@ -1236,9 +663,6 @@ def test_get_statuses_credentials_missing_hidden_before_started(mocker):
     A relation present from deploy time (e.g. Terraform) but with credentials not
     yet applied must not surface the status while the unit is still starting up.
     """
-    from src.managers.backup import BackupManager
-    from src.statuses import BackupStatuses
-
     state = mocker.MagicMock()
     state.statuses.get.return_value.root = []
     state.unit_server.is_backup_in_progress = False
@@ -1256,9 +680,6 @@ def test_get_statuses_flags_a_backend_conflict(mocker):
 
     Nothing can pick a backend, so this beats the credentials-missing status.
     """
-    from src.managers.backup import BackupManager
-    from src.statuses import BackupStatuses
-
     state = mocker.MagicMock()
     state.statuses.get.return_value.root = []
     state.unit_server.is_backup_in_progress = False
@@ -1277,11 +698,6 @@ def test_create_backup_kills_producer_on_upload_failure(mocker):
     No explicit object delete is issued -- a failed multipart/PutObject leaves
     no complete object to clean up, and the SDK aborts the upload itself.
     """
-    import pytest
-
-    from common.exceptions import StorageBackendError, ValkeyBackupError
-    from src.managers.backup import BackupManager
-
     state = _make_state(mocker)
     workload = mocker.MagicMock()
     workload.cli = "valkey-cli"
@@ -1308,10 +724,6 @@ def test_create_backup_kills_producer_on_upload_failure(mocker):
 
 def test_metadata_declares_azure_relation():
     """The Azure integrator relation is declared and mutually exclusive-friendly."""
-    import pathlib
-
-    import yaml
-
     meta = yaml.safe_load(pathlib.Path("metadata.yaml").read_text())
     az = meta["requires"]["azure-credentials"]
     assert az["interface"] == "azure_storage"
@@ -1321,8 +733,6 @@ def test_metadata_declares_azure_relation():
 
 def test_azure_parameters_valid_and_normalised():
     """Trims whitespace, strips the separators that would corrupt blob keys."""
-    from src.core.models import AzureStorageParameters
-
     p = AzureStorageParameters.model_validate(
         {
             "container": " c ",
@@ -1347,8 +757,6 @@ def test_azure_parameters_lowercases_the_connection_protocol():
     An integrator sending "HTTPS" must not fall through to the http branch of
     the account URL.
     """
-    from src.core.models import AzureStorageParameters
-
     p = AzureStorageParameters.model_validate(
         {
             "container": "c",
@@ -1363,11 +771,6 @@ def test_azure_parameters_lowercases_the_connection_protocol():
 
 def test_azure_parameters_rejects_empty_required():
     """An empty path would make list_backups enumerate the whole container."""
-    import pytest
-    from pydantic import ValidationError
-
-    from src.core.models import AzureStorageParameters
-
     base = {
         "container": "c",
         "storage-account": "a",
@@ -1382,11 +785,6 @@ def test_azure_parameters_rejects_empty_required():
 
 def test_azure_parameters_rejects_adls_protocols():
     """abfs/abfss are ADLS-Gen2, served by the datalake SDK -- not BlobServiceClient."""
-    import pytest
-    from pydantic import ValidationError
-
-    from src.core.models import AzureStorageParameters
-
     for proto in ("abfs", "abfss", "ABFSS"):
         with pytest.raises(ValidationError):
             AzureStorageParameters.model_validate(
@@ -1401,8 +799,6 @@ def test_azure_parameters_rejects_adls_protocols():
 
 
 def test_peer_app_model_has_azure_credentials_field():
-    from src.core.models import PeerAppModel
-
     fields = PeerAppModel.model_fields
     assert "azure_credentials" in fields
     assert fields["azure_credentials"].default is None
@@ -1410,8 +806,6 @@ def test_peer_app_model_has_azure_credentials_field():
 
 def test_cluster_azure_credentials_parses_envelope_and_defaults_none(mocker):
     """The stored envelope parses back to AzureStorageParameters; unset reads as None."""
-    from src.core.models import AzureStorageParameters, ValkeyCluster
-
     cluster = ValkeyCluster.__new__(ValkeyCluster)
     cluster.model = mocker.MagicMock()
 
@@ -1443,11 +837,6 @@ def test_credentials_changed_handlers_cover_every_registered_backend(mocker):
     ``_reconcile_other_backends`` and the leader_elected recovery observers are
     both generated from this table, so a missing entry silently loses a backend.
     """
-    from ops import testing
-
-    from src.charm import ValkeyCharm
-    from src.literals import BACKUP_CREDENTIAL_FIELDS, PEER_RELATION, STATUS_PEERS_RELATION
-
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     state_in = testing.State(
         model=testing.Model(name="m", type="lxd"),
@@ -1463,175 +852,12 @@ def test_credentials_changed_handlers_cover_every_registered_backend(mocker):
     assert set(handlers) == set(BACKUP_CREDENTIAL_FIELDS)
 
 
-def test_on_azure_credentials_changed_leader_writes_databag(mocker):
-    """The Azure handler delegates the leader/conflict/validate/store half."""
-    import json
-
-    from src.events.backup import BackupEvents
-
-    charm = mocker.MagicMock()
-    charm.unit.is_leader.return_value = True
-    charm.state.peer_relation = mocker.MagicMock()
-    charm.state.backup_backends_conflict = False
-    charm.state.is_backup_in_progress_any = False
-    charm.state.cluster.is_restore_in_progress = False
-
-    evt = BackupEvents.__new__(BackupEvents)
-    evt.charm = charm
-    evt.azure_requirer = mocker.MagicMock()
-    evt.azure_requirer.get_storage_connection_info.return_value = {
-        "container": " c ",
-        "storage-account": "acct",
-        "secret-key": "SK",
-        "connection-protocol": "https",
-        "path": "/valkey/",
-    }
-
-    evt._on_azure_credentials_changed(mocker.MagicMock())
-
-    charm.backup_manager.ensure_container.assert_called_once()
-    args, _ = charm.state.cluster.update.call_args
-    creds = json.loads(args[0]["azure_credentials"])
-    assert creds["container"] == "c"
-    assert creds["path"] == "valkey"
-    assert creds["storage-account"] == "acct"
-
-
-def test_on_azure_credentials_changed_without_info_is_a_noop(mocker):
-    """Fired on leader_elected with no Azure relation: nothing to store."""
-    from src.events.backup import BackupEvents
-
-    charm = mocker.MagicMock()
-    evt = BackupEvents.__new__(BackupEvents)
-    evt.charm = charm
-    evt.azure_requirer = mocker.MagicMock()
-    evt.azure_requirer.get_storage_connection_info.return_value = {}
-
-    evt._on_azure_credentials_changed(mocker.MagicMock())
-
-    charm.state.cluster.update.assert_not_called()
-    charm.backup_manager.ensure_container.assert_not_called()
-
-
-def test_on_azure_credentials_changed_never_touches_the_s3_ca(mocker):
-    """The endpoint CA is an S3-only concept; Azure must not clobber the file."""
-    from src.events.backup import BackupEvents
-
-    charm = mocker.MagicMock()
-    charm.unit.is_leader.return_value = False
-
-    evt = BackupEvents.__new__(BackupEvents)
-    evt.charm = charm
-    evt.azure_requirer = mocker.MagicMock()
-    evt.azure_requirer.get_storage_connection_info.return_value = {
-        "container": "c",
-        "storage-account": "acct",
-        "secret-key": "SK",
-        "connection-protocol": "https",
-        "path": "valkey",
-    }
-
-    evt._on_azure_credentials_changed(mocker.MagicMock())
-
-    charm.backup_manager.store_tls_ca_chain.assert_not_called()
-    charm.backup_manager.remove_tls_ca_chain.assert_not_called()
-
-
-def test_on_azure_credentials_gone_defers_during_backup(mocker):
-    from src.events.backup import BackupEvents
-
-    charm = mocker.MagicMock()
-    charm.state.is_backup_in_progress_any = True
-
-    evt = BackupEvents.__new__(BackupEvents)
-    evt.charm = charm
-    event = mocker.MagicMock()
-
-    evt._on_azure_credentials_gone(event)
-
-    event.defer.assert_called_once()
-    charm.state.cluster.update.assert_not_called()
-
-
-def test_on_azure_credentials_gone_clears_databag_and_converges_s3(mocker):
-    """Removing the Azure integrator clears the conflict, so S3 gets another go."""
-    from src.events.backup import BackupEvents
-    from src.literals import AZURE_RELATION_NAME, S3_RELATION_NAME
-
-    charm = mocker.MagicMock()
-    charm.state.is_backup_in_progress_any = False
-    charm.state.cluster.is_restore_in_progress = False
-    charm.unit.is_leader.return_value = True
-
-    s3_handler = mocker.Mock()
-    evt = BackupEvents.__new__(BackupEvents)
-    evt.charm = charm
-    evt._credentials_changed_handlers = {
-        S3_RELATION_NAME: s3_handler,
-        AZURE_RELATION_NAME: mocker.Mock(),
-    }
-
-    evt._on_azure_credentials_gone(mocker.MagicMock())
-
-    charm.state.cluster.update.assert_called_once_with({"azure_credentials": ""})
-    # Azure carries no charm-local CA, so nothing on disk is touched.
-    charm.backup_manager.remove_tls_ca_chain.assert_not_called()
-    s3_handler.assert_called_once()
-    evt._credentials_changed_handlers[AZURE_RELATION_NAME].assert_not_called()
-
-
-def test_on_azure_credentials_gone_non_leader_does_not_clear_databag(mocker):
-    from src.events.backup import BackupEvents
-
-    charm = mocker.MagicMock()
-    charm.state.is_backup_in_progress_any = False
-    charm.state.cluster.is_restore_in_progress = False
-    charm.unit.is_leader.return_value = False
-
-    evt = BackupEvents.__new__(BackupEvents)
-    evt.charm = charm
-    evt._credentials_changed_handlers = {}
-
-    evt._on_azure_credentials_gone(mocker.MagicMock())
-
-    charm.state.cluster.update.assert_not_called()
-
-
-def test_on_s3_credentials_gone_converges_the_surviving_azure_backend(mocker):
-    """The mirror case: dropping S3 must re-drive the still-related Azure backend."""
-    from src.events.backup import BackupEvents
-    from src.literals import AZURE_RELATION_NAME, S3_RELATION_NAME
-
-    charm = mocker.MagicMock()
-    charm.state.is_backup_in_progress_any = False
-    charm.state.cluster.is_restore_in_progress = False
-    charm.unit.is_leader.return_value = True
-
-    azure_handler = mocker.Mock()
-    evt = BackupEvents.__new__(BackupEvents)
-    evt.charm = charm
-    evt._credentials_changed_handlers = {
-        S3_RELATION_NAME: mocker.Mock(),
-        AZURE_RELATION_NAME: azure_handler,
-    }
-
-    evt._on_s3_credentials_gone(mocker.MagicMock())
-
-    charm.state.cluster.update.assert_called_once_with({"s3_credentials": ""})
-    azure_handler.assert_called_once()
-
-
 def test_azure_parameters_rejects_an_unknown_connection_protocol():
     """Only the six documented integrator values are accepted.
 
     Anything else would fall through to the plaintext branch of the account URL
     and fail obscurely at request time instead of at the relation boundary.
     """
-    import pytest
-    from pydantic import ValidationError
-
-    from src.core.models import AzureStorageParameters
-
     with pytest.raises(ValidationError):
         AzureStorageParameters.model_validate(
             {
@@ -1645,9 +871,6 @@ def test_azure_parameters_rejects_an_unknown_connection_protocol():
 
 
 def test_azure_parameters_accepts_every_blob_connection_protocol():
-    from src.core.models import AzureStorageParameters
-    from src.literals import AZURE_HTTP_PROTOCOLS, AZURE_HTTPS_PROTOCOLS
-
     for proto in AZURE_HTTPS_PROTOCOLS | AZURE_HTTP_PROTOCOLS:
         params = AzureStorageParameters.model_validate(
             {
@@ -1668,10 +891,6 @@ def test_create_backup_kills_producer_on_an_unexpected_upload_error(mocker):
     names would otherwise skip `proc.kill()` and leave `valkey-cli --rdb -`
     blocked on a pipe nobody drains.
     """
-    import pytest
-
-    from src.managers.backup import BackupManager
-
     state = _make_state(mocker)
     workload = mocker.MagicMock()
     workload.cli = "valkey-cli"
@@ -1689,3 +908,813 @@ def test_create_backup_kills_producer_on_an_unexpected_upload_error(mocker):
     proc.kill.assert_called_once()
     # The lock is still released on the way out.
     assert state.unit_server.update.call_args_list[-1].args[0] == {"backup_id": ""}
+
+
+# ── GCS backend ─────────────────────────────────────────────────────────
+
+
+def _gcs_service_account(**overrides) -> str:
+    """Build a syntactically complete service-account key; the private key is a stub.
+
+    Only the model and the mocked SDK ever see it, so the PEM body is never
+    parsed. ``overrides`` replace top-level keys (``None`` keeps the key with a
+    null value, which is how "absent" is exercised).
+    """
+    info = {
+        "type": "service_account",
+        "project_id": "proj",
+        "client_email": "backup@proj.iam.gserviceaccount.com",
+        "private_key": "-----BEGIN PRIVATE KEY-----\nstub\n-----END PRIVATE KEY-----\n",
+        "token_uri": "https://oauth2.googleapis.com/token",
+    }
+    info.update(overrides)
+    return json.dumps(info)
+
+
+def test_gcs_parameters_valid_and_normalised():
+    """Trims whitespace, strips the separators that would corrupt object names.
+
+    Also stores the key as canonical JSON text.
+    """
+    key = _gcs_service_account()
+    p = GCSParameters.model_validate(
+        {
+            "bucket": " /data-charms-testing/ ",
+            "path": "/valkey/",
+            "secret-key": f"  {key}\n",
+            "storage-class": " nearline ",
+        }
+    )
+    assert p.bucket == "data-charms-testing"
+    assert p.path == "valkey"
+    assert p.secret_key == json.dumps(json.loads(key), sort_keys=True)
+    assert p.storage_class == "NEARLINE"
+
+
+def test_gcs_parameters_accepts_the_dict_the_requirer_lib_hands_over():
+    """object-storage-charmlib json.loads every published field, so the JSON key reaches the charm as a dict.
+
+    It is canonicalised back to JSON text.
+    """
+    info = json.loads(_gcs_service_account())
+    p = GCSParameters.model_validate({"bucket": "b", "path": "valkey", "secret-key": info})
+    assert isinstance(p.secret_key, str)
+    assert json.loads(p.secret_key) == info
+
+
+def test_gcs_parameters_accepts_a_base64_encoded_key():
+    """CI secret plumbing cannot carry raw JSON, so a base64 form is accepted and decoded at the boundary.
+
+    As mongo does: either alphabet, and wrapped at 76 columns the way the
+    `base64` CLI emits it without -w0 (spread's env export turns those
+    newlines into spaces, which is the same case).
+    """
+    key = _gcs_service_account()
+    wrapped = base64.encodebytes(key.encode()).decode()
+    assert "\n" in wrapped.strip()  # the case under test really is multi-line
+    for encoded in (
+        base64.b64encode(key.encode()).decode(),
+        base64.urlsafe_b64encode(key.encode()).decode(),
+        wrapped,
+        wrapped.replace("\n", " "),
+    ):
+        p = GCSParameters.model_validate({"bucket": "b", "path": "valkey", "secret-key": encoded})
+        assert json.loads(p.secret_key) == json.loads(key)
+
+
+def test_gcs_parameters_canonical_form_is_key_order_independent():
+    """The stored envelope must compare equal to a re-supplied key with the same content.
+
+    Otherwise _store_credentials re-runs ensure_container on every
+    leader-elected and rewrites the secret for nothing.
+    """
+    info = json.loads(_gcs_service_account())
+    reordered = dict(reversed(list(info.items())))
+    base = {"bucket": "b", "path": "valkey"}
+    a = GCSParameters.model_validate({**base, "secret-key": info})
+    b = GCSParameters.model_validate({**base, "secret-key": json.dumps(reordered)})
+    assert a.secret_key == b.secret_key
+    assert a.model_dump() == b.model_dump()
+
+
+def test_gcs_parameters_storage_class_is_optional():
+    base = {"bucket": "b", "path": "valkey", "secret-key": _gcs_service_account()}
+    assert GCSParameters.model_validate(base).storage_class is None
+    assert GCSParameters.model_validate({**base, "storage-class": ""}).storage_class is None
+
+
+def test_gcs_parameters_rejects_an_unknown_storage_class():
+    """Only the integrator's documented classes are accepted.
+
+    The SDK would refuse the rest only at bucket creation, long after the
+    relation settled.
+    """
+    with pytest.raises(ValidationError):
+        GCSParameters.model_validate(
+            {
+                "bucket": "b",
+                "path": "valkey",
+                "secret-key": _gcs_service_account(),
+                "storage-class": "GLACIER",
+            }
+        )
+
+
+def test_gcs_parameters_rejects_empty_required():
+    """An empty path would make list_backups enumerate the whole bucket."""
+    base = {"bucket": "b", "path": "valkey", "secret-key": _gcs_service_account()}
+    for field in ("bucket", "path", "secret-key"):
+        with pytest.raises(ValidationError):
+            GCSParameters.model_validate({**base, field: ""})
+    with pytest.raises(ValidationError):
+        GCSParameters.model_validate({"bucket": "b", "path": "valkey"})
+
+
+def test_gcs_parameters_rejects_a_malformed_service_account_key():
+    """A key that is not JSON, not base64 JSON, not an object, or lacks a required field is refused.
+
+    The relation boundary names the field, never the value, whether the
+    input was a string or the lib's dict.
+    """
+    base = {"bucket": "b", "path": "valkey"}
+    bad = {
+        "not json": "-----BEGIN PRIVATE KEY-----\nstub\n-----END PRIVATE KEY-----",
+        "base64 of not json": base64.b64encode(b"stub, not json").decode(),
+        "not an object": "[1, 2]",
+        "no client_email": _gcs_service_account(client_email=None),
+        "no private_key": _gcs_service_account(private_key=""),
+        "dict without private_key": json.loads(_gcs_service_account(private_key="")),
+    }
+    for reason, key in bad.items():
+        with pytest.raises(ValidationError) as excinfo:
+            GCSParameters.model_validate({**base, "secret-key": key})
+        text = str(excinfo.value)
+        assert "stub" not in text and "BEGIN PRIVATE KEY" not in text, reason
+    assert "private_key" in str(excinfo.value)
+
+
+def test_gcs_parameters_ignores_unknown_fields():
+    p = GCSParameters.model_validate(
+        {
+            "bucket": "b",
+            "path": "valkey",
+            "secret-key": _gcs_service_account(),
+            "endpoint": "https://storage.googleapis.com",
+        }
+    )
+    assert not hasattr(p, "endpoint")
+
+
+def test_peer_app_model_has_gcs_credentials_field():
+    fields = PeerAppModel.model_fields
+    assert "gcs_credentials" in fields
+    assert fields["gcs_credentials"].default is None
+
+
+def test_cluster_gcs_credentials_parses_envelope_and_defaults_none(mocker):
+    """The stored envelope parses back to GCSParameters; unset reads as None."""
+    cluster = ValkeyCluster.__new__(ValkeyCluster)
+    cluster.model = mocker.MagicMock()
+
+    key = _gcs_service_account()
+    params = GCSParameters.model_validate(
+        {"bucket": "b", "path": "valkey", "secret-key": key, "storage-class": "STANDARD"}
+    )
+    cluster.model.gcs_credentials = params.model_dump_json(by_alias=True)
+    got = cluster.gcs_credentials
+    assert isinstance(got, GCSParameters)
+    assert got.bucket == "b"
+    assert json.loads(got.secret_key) == json.loads(key)
+    assert got.storage_class == "STANDARD"
+    # Round trip is stable: what was stored re-validates to the same envelope.
+    assert got.model_dump() == params.model_dump()
+
+    cluster.model.gcs_credentials = None
+    assert cluster.gcs_credentials is None
+
+    cluster.model.gcs_credentials = "{not json"
+    assert cluster.gcs_credentials is None
+
+    cluster.model = None
+    assert cluster.gcs_credentials is None
+
+
+def test_metadata_declares_gcs_relation():
+    """The GCS integrator relation is declared and mutually exclusive-friendly."""
+    meta = yaml.safe_load(pathlib.Path("metadata.yaml").read_text())
+    gcs = meta["requires"]["gcs-credentials"]
+    assert gcs["interface"] == "gcs"
+    assert gcs["limit"] == 1
+    assert gcs["optional"] is True
+
+
+def test_gcs_credentials_flow_through_the_real_requirer(mocker):
+    """Contract test through object-storage-charmlib, not a hand-shaped payload.
+
+    The lib json.loads every published field, so the key reaches the charm as a
+    dict; the provider's databag points at a Juju secret holding it. The leader
+    must end up with the envelope stored.
+    """
+    ensure = mocker.patch("managers.backup.BackupManager.ensure_container")
+    key = _gcs_service_account()
+    secret = testing.Secret(tracked_content={"secret-key": key})
+    gcs_rel = testing.Relation(
+        id=5,
+        endpoint=GCS_RELATION_NAME,
+        interface="gcs",
+        remote_app_name="gcs-integrator",
+        remote_app_data={
+            "bucket": "b",
+            "path": "valkey",
+            "secret-extra": secret.id,
+            "version": "1",
+        },
+        local_app_data={"requested-secrets": json.dumps(["secret-key"]), "version": "1"},
+    )
+    ctx = testing.Context(ValkeyCharm, app_trusted=True)
+    state_in = testing.State(
+        model=testing.Model(name="m", type="lxd"),
+        leader=True,
+        relations={
+            testing.PeerRelation(id=1, endpoint=PEER_RELATION),
+            testing.PeerRelation(id=2, endpoint=STATUS_PEERS_RELATION),
+            gcs_rel,
+        },
+        secrets={secret},
+        containers={testing.Container(name="valkey", can_connect=True)},
+    )
+
+    with ctx(ctx.on.relation_changed(gcs_rel, remote_unit=0), state_in) as manager:
+        state_out = manager.run()
+        stored = manager.charm.state.cluster.gcs_credentials
+
+    ensure.assert_called_once()
+    assert stored is not None
+    assert stored.bucket == "b"
+    assert stored.path == "valkey"
+    assert json.loads(stored.secret_key)["client_email"] == "backup@proj.iam.gserviceaccount.com"
+
+    # Only a secret URI may hit the databag: the envelope lives in an app-owned
+    # Juju secret (dpcharmlibs hyphenates the field name).
+    peer_out = state_out.get_relation(1)
+    assert "gcs-credentials" not in peer_out.local_app_data
+    assert not any("private_key" in v for v in peer_out.local_app_data.values())
+    envelopes = [s for s in state_out.secrets if "gcs-credentials" in (s.latest_content or {})]
+    assert len(envelopes) == 1
+    assert (
+        json.loads(json.loads(envelopes[0].latest_content["gcs-credentials"])["secret-key"])[
+            "client_email"
+        ]
+        == "backup@proj.iam.gserviceaccount.com"
+    )
+
+
+# ── event-driven (ops.testing / Scenario) ────────────────────────────────────
+#
+# The credentials handlers, the relation-gone paths and the backup actions are
+# driven through real Juju events, so the object-storage requirer lib and the
+# peer-relation secret routing are part of every test.
+
+BACKUP_ID = "2026-05-13T10:00:00Z"
+
+
+def _backup_context_and_state(*, leader=True, relations=(), secrets=(), unit_data=None, peer=True):
+    """Build a Context + State with the peer relations and the given storage relations."""
+    ctx = testing.Context(ValkeyCharm, app_trusted=True)
+    peers = {testing.PeerRelation(id=2, endpoint=STATUS_PEERS_RELATION)}
+    if peer:
+        peers.add(
+            testing.PeerRelation(
+                id=1,
+                endpoint=PEER_RELATION,
+                local_unit_data={"start-state": "started", **(unit_data or {})},
+            )
+        )
+    state = testing.State(
+        model=testing.Model(name="m", type="lxd"),
+        leader=leader,
+        relations={*peers, *relations},
+        secrets=set(secrets),
+        containers={testing.Container(name="valkey", can_connect=True)},
+    )
+    return ctx, state
+
+
+def _integrator_relation(rel_id, endpoint, interface, secret_content, data):
+    """Build a storage-integrator relation as the provider publishes it.
+
+    Secret fields travel in a Juju secret referenced from ``secret-extra``, the
+    lib's protocol. Returns the relation and the secret for the State.
+    """
+    secret = testing.Secret(tracked_content=secret_content)
+    relation = testing.Relation(
+        id=rel_id,
+        endpoint=endpoint,
+        interface=interface,
+        remote_app_name=f"{interface}-integrator",
+        remote_app_data={
+            **{k: v for k, v in data.items() if v is not None},
+            "secret-extra": secret.id,
+            "version": "1",
+        },
+        local_app_data={"requested-secrets": json.dumps(list(secret_content)), "version": "1"},
+    )
+    return relation, secret
+
+
+def _s3_relation(**overrides):
+    data = {"bucket": "b", "endpoint": "https://e", "path": "p", **overrides}
+    return _integrator_relation(
+        3, S3_RELATION_NAME, "s3", {"access-key": "AK", "secret-key": "SK"}, data
+    )
+
+
+def _azure_relation(**overrides):
+    data = {
+        "container": "c",
+        "storage-account": "acct",
+        "connection-protocol": "https",
+        "path": "valkey",
+        **overrides,
+    }
+    return _integrator_relation(
+        4, AZURE_RELATION_NAME, "azure_storage", {"secret-key": "SK"}, data
+    )
+
+
+def _gcs_relation(**overrides):
+    data = {"bucket": "b", "path": "valkey", **overrides}
+    return _integrator_relation(
+        5, GCS_RELATION_NAME, "gcs", {"secret-key": _gcs_service_account()}, data
+    )
+
+
+def _stored_credentials(state, field):
+    """Return the credentials envelope from the app-owned peer secret, or None."""
+    for secret in state.secrets:
+        if field in (secret.latest_content or {}):
+            return json.loads(secret.latest_content[field])
+    return None
+
+
+def _run_relation_changed(ctx, state, relation):
+    """Deliver the provider's data through the requirer lib; return the new State."""
+    return ctx.run(ctx.on.relation_changed(state.get_relation(relation.id), remote_unit=0), state)
+
+
+def _run_relation_broken(ctx, state, relation):
+    return ctx.run(ctx.on.relation_broken(state.get_relation(relation.id)), state)
+
+
+@pytest.fixture
+def backup_managers(mocker):
+    """Patch the manager/workload ops behind the backup events; return the mocks."""
+    return SimpleNamespace(
+        ensure_container=mocker.patch("managers.backup.BackupManager.ensure_container"),
+        store_tls_ca_chain=mocker.patch("managers.backup.BackupManager.store_tls_ca_chain"),
+        remove_tls_ca_chain=mocker.patch("managers.backup.BackupManager.remove_tls_ca_chain"),
+        create_backup=mocker.patch(
+            "managers.backup.BackupManager.create_backup", return_value=BACKUP_ID
+        ),
+        list_backups=mocker.patch("managers.backup.BackupManager.list_backups", return_value=[]),
+        alive=mocker.patch("workload_k8s.ValkeyK8sWorkload.alive", return_value=True),
+    )
+
+
+# ── credentials changed ──────────────────────────────────────────────────────
+
+
+def test_s3_credentials_changed_leader_stores_the_normalised_envelope(backup_managers):
+    s3_rel, secret = _s3_relation(bucket=" b ", endpoint="https://e/", path="/p/")
+    ctx, state = _backup_context_and_state(relations=[s3_rel], secrets=[secret])
+
+    state_out = _run_relation_changed(ctx, state, s3_rel)
+
+    backup_managers.ensure_container.assert_called_once()
+    stored = _stored_credentials(state_out, "s3-credentials")
+    assert stored["bucket"] == "b"
+    assert stored["endpoint"] == "https://e"
+    assert stored["path"] == "p"
+    assert stored["access-key"] == "AK"
+
+
+def test_s3_credentials_changed_stores_the_ca_on_every_unit(backup_managers):
+    """The endpoint CA is needed on disk by every unit; only the leader stores credentials."""
+    s3_rel, secret = _s3_relation(**{"tls-ca-chain": json.dumps(["-----CERT-----"])})
+    ctx, state = _backup_context_and_state(leader=False, relations=[s3_rel], secrets=[secret])
+
+    state_out = _run_relation_changed(ctx, state, s3_rel)
+
+    backup_managers.store_tls_ca_chain.assert_called_once()
+    assert backup_managers.store_tls_ca_chain.call_args.args[0]["tls-ca-chain"] == [
+        "-----CERT-----"
+    ]
+    assert _stored_credentials(state_out, "s3-credentials") is None
+
+
+def test_s3_credentials_changed_rejects_a_path_that_strips_to_empty(backup_managers):
+    s3_rel, secret = _s3_relation(path="/")
+    ctx, state = _backup_context_and_state(relations=[s3_rel], secrets=[secret])
+
+    state_out = _run_relation_changed(ctx, state, s3_rel)
+
+    backup_managers.ensure_container.assert_not_called()
+    assert _stored_credentials(state_out, "s3-credentials") is None
+
+
+def test_s3_credentials_changed_rejects_an_incomplete_payload(backup_managers):
+    s3_rel, secret = _s3_relation(endpoint=None)
+    ctx, state = _backup_context_and_state(relations=[s3_rel], secrets=[secret])
+
+    state_out = _run_relation_changed(ctx, state, s3_rel)
+
+    backup_managers.ensure_container.assert_not_called()
+    assert _stored_credentials(state_out, "s3-credentials") is None
+
+
+def test_s3_credentials_changed_skips_an_unchanged_envelope(backup_managers):
+    """leader_elected re-fires the handler; an unchanged envelope must not hit the store again."""
+    s3_rel, secret = _s3_relation()
+    ctx, state = _backup_context_and_state(relations=[s3_rel], secrets=[secret])
+
+    state = _run_relation_changed(ctx, state, s3_rel)
+    _run_relation_changed(ctx, state, s3_rel)
+
+    backup_managers.ensure_container.assert_called_once()
+
+
+def test_s3_credentials_changed_defers_without_the_peer_relation(backup_managers):
+    s3_rel, secret = _s3_relation()
+    ctx, state = _backup_context_and_state(relations=[s3_rel], secrets=[secret], peer=False)
+
+    state_out = _run_relation_changed(ctx, state, s3_rel)
+
+    assert len(state_out.deferred) == 1
+    backup_managers.ensure_container.assert_not_called()
+
+
+def test_credentials_are_not_stored_while_backends_conflict(backup_managers):
+    """With two integrators related there is no answer to "which backend"; store nothing."""
+    s3_rel, s3_secret = _s3_relation()
+    azure_rel, azure_secret = _azure_relation()
+    ctx, state = _backup_context_and_state(
+        relations=[s3_rel, azure_rel], secrets=[s3_secret, azure_secret]
+    )
+
+    state_out = _run_relation_changed(ctx, state, s3_rel)
+
+    backup_managers.ensure_container.assert_not_called()
+    assert _stored_credentials(state_out, "s3-credentials") is None
+
+
+def test_azure_credentials_changed_leader_stores_the_normalised_envelope(backup_managers):
+    azure_rel, secret = _azure_relation(container=" c ", path="/valkey/")
+    ctx, state = _backup_context_and_state(relations=[azure_rel], secrets=[secret])
+
+    state_out = _run_relation_changed(ctx, state, azure_rel)
+
+    backup_managers.ensure_container.assert_called_once()
+    stored = _stored_credentials(state_out, "azure-credentials")
+    assert stored["container"] == "c"
+    assert stored["path"] == "valkey"
+    assert stored["storage-account"] == "acct"
+
+
+def test_azure_credentials_changed_never_touches_the_s3_ca(backup_managers):
+    azure_rel, secret = _azure_relation()
+    ctx, state = _backup_context_and_state(leader=False, relations=[azure_rel], secrets=[secret])
+
+    _run_relation_changed(ctx, state, azure_rel)
+
+    backup_managers.store_tls_ca_chain.assert_not_called()
+    backup_managers.remove_tls_ca_chain.assert_not_called()
+
+
+def test_gcs_credentials_changed_leader_stores_the_normalised_envelope(backup_managers):
+    """The key arrives as the dict the lib hands over and is stored as canonical JSON text."""
+    gcs_rel, secret = _gcs_relation(
+        bucket=" data-charms-testing ", path="/valkey/", **{"storage-class": "standard"}
+    )
+    ctx, state = _backup_context_and_state(relations=[gcs_rel], secrets=[secret])
+
+    state_out = _run_relation_changed(ctx, state, gcs_rel)
+
+    backup_managers.ensure_container.assert_called_once()
+    stored = _stored_credentials(state_out, "gcs-credentials")
+    assert stored["bucket"] == "data-charms-testing"
+    assert stored["path"] == "valkey"
+    assert stored["storage-class"] == "STANDARD"
+    assert json.loads(stored["secret-key"]) == json.loads(_gcs_service_account())
+
+
+def test_gcs_credentials_changed_never_touches_the_s3_ca(backup_managers):
+    gcs_rel, secret = _gcs_relation()
+    ctx, state = _backup_context_and_state(leader=False, relations=[gcs_rel], secrets=[secret])
+
+    _run_relation_changed(ctx, state, gcs_rel)
+
+    backup_managers.store_tls_ca_chain.assert_not_called()
+    backup_managers.remove_tls_ca_chain.assert_not_called()
+
+
+def test_leader_elected_without_a_storage_relation_stores_nothing(backup_managers):
+    """Every backend's handler re-fires on leader_elected and must no-op without its relation."""
+    ctx, state = _backup_context_and_state()
+
+    state_out = ctx.run(ctx.on.leader_elected(), state)
+
+    backup_managers.ensure_container.assert_not_called()
+    for field in ("s3-credentials", "azure-credentials", "gcs-credentials"):
+        assert _stored_credentials(state_out, field) is None
+
+
+# ── credentials gone ─────────────────────────────────────────────────────────
+
+
+def test_s3_credentials_gone_removes_the_ca_and_clears_the_envelope(backup_managers):
+    s3_rel, secret = _s3_relation()
+    ctx, state = _backup_context_and_state(relations=[s3_rel], secrets=[secret])
+    state = _run_relation_changed(ctx, state, s3_rel)
+    assert _stored_credentials(state, "s3-credentials") is not None
+
+    state_out = _run_relation_broken(ctx, state, s3_rel)
+
+    backup_managers.remove_tls_ca_chain.assert_called_once_with()
+    assert _stored_credentials(state_out, "s3-credentials") is None
+
+
+def test_s3_credentials_gone_on_a_non_leader_keeps_the_envelope(backup_managers):
+    s3_rel, secret = _s3_relation()
+    ctx, state = _backup_context_and_state(relations=[s3_rel], secrets=[secret])
+    state = replace(_run_relation_changed(ctx, state, s3_rel), leader=False)
+
+    state_out = _run_relation_broken(ctx, state, s3_rel)
+
+    backup_managers.remove_tls_ca_chain.assert_called_once_with()
+    assert _stored_credentials(state_out, "s3-credentials") is not None
+
+
+def test_s3_credentials_gone_defers_during_a_backup(backup_managers):
+    s3_rel, secret = _s3_relation()
+    ctx, state = _backup_context_and_state(
+        relations=[s3_rel], secrets=[secret], unit_data={"backup-id": BACKUP_ID}
+    )
+
+    state_out = _run_relation_broken(ctx, state, s3_rel)
+
+    assert len(state_out.deferred) == 1
+    backup_managers.remove_tls_ca_chain.assert_not_called()
+
+
+def test_azure_credentials_gone_clears_the_envelope_without_touching_the_ca(backup_managers):
+    azure_rel, secret = _azure_relation()
+    ctx, state = _backup_context_and_state(relations=[azure_rel], secrets=[secret])
+    state = _run_relation_changed(ctx, state, azure_rel)
+
+    state_out = _run_relation_broken(ctx, state, azure_rel)
+
+    backup_managers.remove_tls_ca_chain.assert_not_called()
+    assert _stored_credentials(state_out, "azure-credentials") is None
+
+
+def test_azure_credentials_gone_on_a_non_leader_keeps_the_envelope(backup_managers):
+    azure_rel, secret = _azure_relation()
+    ctx, state = _backup_context_and_state(relations=[azure_rel], secrets=[secret])
+    state = replace(_run_relation_changed(ctx, state, azure_rel), leader=False)
+
+    state_out = _run_relation_broken(ctx, state, azure_rel)
+
+    assert _stored_credentials(state_out, "azure-credentials") is not None
+
+
+def test_azure_credentials_gone_defers_during_a_backup(backup_managers):
+    azure_rel, secret = _azure_relation()
+    ctx, state = _backup_context_and_state(
+        relations=[azure_rel], secrets=[secret], unit_data={"backup-id": BACKUP_ID}
+    )
+
+    state_out = _run_relation_broken(ctx, state, azure_rel)
+
+    assert len(state_out.deferred) == 1
+
+
+def test_gcs_credentials_gone_clears_the_envelope_without_touching_the_ca(backup_managers):
+    gcs_rel, secret = _gcs_relation()
+    ctx, state = _backup_context_and_state(relations=[gcs_rel], secrets=[secret])
+    state = _run_relation_changed(ctx, state, gcs_rel)
+
+    state_out = _run_relation_broken(ctx, state, gcs_rel)
+
+    backup_managers.remove_tls_ca_chain.assert_not_called()
+    assert _stored_credentials(state_out, "gcs-credentials") is None
+
+
+def test_gcs_credentials_gone_on_a_non_leader_keeps_the_envelope(backup_managers):
+    gcs_rel, secret = _gcs_relation()
+    ctx, state = _backup_context_and_state(relations=[gcs_rel], secrets=[secret])
+    state = replace(_run_relation_changed(ctx, state, gcs_rel), leader=False)
+
+    state_out = _run_relation_broken(ctx, state, gcs_rel)
+
+    assert _stored_credentials(state_out, "gcs-credentials") is not None
+
+
+def test_gcs_credentials_gone_defers_during_a_backup(backup_managers):
+    gcs_rel, secret = _gcs_relation()
+    ctx, state = _backup_context_and_state(
+        relations=[gcs_rel], secrets=[secret], unit_data={"backup-id": BACKUP_ID}
+    )
+
+    state_out = _run_relation_broken(ctx, state, gcs_rel)
+
+    assert len(state_out.deferred) == 1
+
+
+@pytest.mark.parametrize(
+    ("removed", "survivor", "survivor_field"),
+    [
+        (_s3_relation, _azure_relation, "azure-credentials"),
+        (_s3_relation, _gcs_relation, "gcs-credentials"),
+        (_azure_relation, _s3_relation, "s3-credentials"),
+        (_gcs_relation, _s3_relation, "s3-credentials"),
+        (_gcs_relation, _azure_relation, "azure-credentials"),
+    ],
+)
+def test_credentials_gone_converges_the_surviving_backend(
+    backup_managers, removed, survivor, survivor_field
+):
+    """Two integrators conflict; removing one lets the other store its credentials."""
+    removed_rel, removed_secret = removed()
+    survivor_rel, survivor_secret = survivor()
+    ctx, state = _backup_context_and_state(
+        relations=[removed_rel, survivor_rel],
+        secrets=[removed_secret, survivor_secret],
+    )
+    state = _run_relation_changed(ctx, state, survivor_rel)
+    assert _stored_credentials(state, survivor_field) is None
+
+    state_out = _run_relation_broken(ctx, state, removed_rel)
+
+    backup_managers.ensure_container.assert_called_once()
+    assert _stored_credentials(state_out, survivor_field) is not None
+
+
+# ── backup actions ───────────────────────────────────────────────────────────
+
+
+def _with_s3_credentials(ctx, state, backup_managers):
+    """Store S3 credentials through the real relation-changed path."""
+    state = _run_relation_changed(ctx, state, state.get_relation(3))
+    backup_managers.ensure_container.reset_mock()
+    return state
+
+
+def _with_backup_running(state):
+    """Mark a backup as running on this unit (its per-unit databag lock)."""
+    peer = state.get_relation(1)
+    running = replace(peer, local_unit_data={**peer.local_unit_data, "backup-id": BACKUP_ID})
+    return replace(state, relations={running, *(r for r in state.relations if r.id != 1)})
+
+
+def test_create_backup_action_reports_the_backup_id(backup_managers, caplog):
+    s3_rel, secret = _s3_relation()
+    ctx, state = _backup_context_and_state(relations=[s3_rel], secrets=[secret])
+    state = _with_s3_credentials(ctx, state, backup_managers)
+
+    with caplog.at_level(logging.INFO):
+        ctx.run(ctx.on.action("create-backup", id="42"), state)
+
+    assert ctx.action_results == {"backup-id": BACKUP_ID}
+    # Audit trail: the action id, no unit name (Juju prefixes every line with it).
+    audit = [r.message for r in caplog.records if "audit: create-backup" in r.message]
+    assert audit and "action_id=42" in audit[0] and "unit=" not in audit[0]
+
+
+def test_create_backup_action_fails_without_a_storage_relation(backup_managers):
+    ctx, state = _backup_context_and_state()
+
+    with pytest.raises(testing.ActionFailed) as exc:
+        ctx.run(ctx.on.action("create-backup"), state)
+
+    assert "No backup storage relation" in exc.value.message
+    # The hint is generated from the registry, so every backend appears in it.
+    assert S3_RELATION_NAME in exc.value.message
+    backup_managers.create_backup.assert_not_called()
+
+
+def test_create_backup_action_fails_without_credentials(backup_managers):
+    s3_rel, secret = _s3_relation()
+    ctx, state = _backup_context_and_state(relations=[s3_rel], secrets=[secret])
+
+    with pytest.raises(testing.ActionFailed) as exc:
+        ctx.run(ctx.on.action("create-backup"), state)
+
+    assert "credentials" in exc.value.message.lower()
+
+
+def test_create_backup_action_fails_while_backends_conflict(backup_managers):
+    s3_rel, s3_secret = _s3_relation()
+    azure_rel, azure_secret = _azure_relation()
+    ctx, state = _backup_context_and_state(
+        relations=[s3_rel, azure_rel], secrets=[s3_secret, azure_secret]
+    )
+
+    with pytest.raises(testing.ActionFailed) as exc:
+        ctx.run(ctx.on.action("create-backup"), state)
+
+    assert "exactly one" in exc.value.message
+
+
+def test_create_backup_action_fails_when_valkey_is_down(backup_managers):
+    s3_rel, secret = _s3_relation()
+    ctx, state = _backup_context_and_state(relations=[s3_rel], secrets=[secret])
+    state = _with_s3_credentials(ctx, state, backup_managers)
+    backup_managers.alive.return_value = False
+
+    with pytest.raises(testing.ActionFailed) as exc:
+        ctx.run(ctx.on.action("create-backup"), state)
+
+    assert "not running" in exc.value.message
+
+
+def test_create_backup_action_fails_while_a_backup_is_running_here(backup_managers):
+    s3_rel, secret = _s3_relation()
+    ctx, state = _backup_context_and_state(relations=[s3_rel], secrets=[secret])
+    state = _with_backup_running(_with_s3_credentials(ctx, state, backup_managers))
+
+    with pytest.raises(testing.ActionFailed) as exc:
+        ctx.run(ctx.on.action("create-backup"), state)
+
+    assert "already in progress" in exc.value.message
+    backup_managers.create_backup.assert_not_called()
+
+
+def test_create_backup_action_reports_a_backup_error(backup_managers):
+    s3_rel, secret = _s3_relation()
+    ctx, state = _backup_context_and_state(relations=[s3_rel], secrets=[secret])
+    state = _with_s3_credentials(ctx, state, backup_managers)
+    backup_managers.create_backup.side_effect = ValkeyBackupError("boom")
+
+    with pytest.raises(testing.ActionFailed):
+        ctx.run(ctx.on.action("create-backup"), state)
+
+
+def test_restore_and_backup_guards_share_the_storage_checks(backup_managers):
+    """Both actions gate on backup storage the same way, from one implementation."""
+    s3_rel, s3_secret = _s3_relation()
+    azure_rel, azure_secret = _azure_relation()
+    ctx, state = _backup_context_and_state(
+        relations=[s3_rel, azure_rel], secrets=[s3_secret, azure_secret]
+    )
+
+    with ctx(ctx.on.update_status(), state) as manager:
+        events = manager.charm.backup_events
+        assert events._blocking_reason() == events._restore_blocking_reason(BACKUP_ID)
+
+
+def test_list_backups_action_returns_a_table(backup_managers):
+    s3_rel, secret = _s3_relation()
+    ctx, state = _backup_context_and_state(relations=[s3_rel], secrets=[secret])
+    state = _with_s3_credentials(ctx, state, backup_managers)
+    backup_managers.list_backups.return_value = [BACKUP_ID]
+
+    ctx.run(ctx.on.action("list-backups", params={"output": "table"}), state)
+
+    assert BACKUP_ID in ctx.action_results["backups"]
+
+
+def test_list_backups_action_returns_json(backup_managers):
+    s3_rel, secret = _s3_relation()
+    ctx, state = _backup_context_and_state(relations=[s3_rel], secrets=[secret])
+    state = _with_s3_credentials(ctx, state, backup_managers)
+    backup_managers.list_backups.return_value = ["2026-05-14T10:00:00Z", BACKUP_ID]
+
+    ctx.run(ctx.on.action("list-backups", params={"output": "json"}), state)
+
+    assert json.loads(ctx.action_results["backups"]) == [
+        {"backup-id": "2026-05-14T10:00:00Z", "backup-status": "finished"},
+        {"backup-id": BACKUP_ID, "backup-status": "finished"},
+    ]
+
+
+def test_list_backups_action_rejects_an_invalid_format(backup_managers):
+    s3_rel, secret = _s3_relation()
+    ctx, state = _backup_context_and_state(relations=[s3_rel], secrets=[secret])
+
+    with pytest.raises(testing.ActionFailed) as exc:
+        ctx.run(ctx.on.action("list-backups", params={"output": "yaml"}), state)
+
+    assert "invalid output format" in exc.value.message
+    backup_managers.list_backups.assert_not_called()
+
+
+def test_list_backups_action_runs_while_a_backup_is_running_here(backup_managers):
+    """list-backups is read-only, so a backup on this unit must not block it."""
+    s3_rel, secret = _s3_relation()
+    ctx, state = _backup_context_and_state(relations=[s3_rel], secrets=[secret])
+    state = _with_backup_running(_with_s3_credentials(ctx, state, backup_managers))
+
+    ctx.run(ctx.on.action("list-backups"), state)
+
+    backup_managers.list_backups.assert_called_once()
+    assert "No backups" in ctx.action_results["backups"]
