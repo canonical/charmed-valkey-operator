@@ -14,8 +14,7 @@ Contact Canonical Data Platform team in
 Report your ideas/issues on GitHub:
 
 - Charm issues: <https://github.com/canonical/valkey-operator/issues>
-- Snap packaging: <https://github.com/canonical/charmed-valkey-snap/issues>
-- Rock packaging: <https://github.com/canonical/charmed-valkey-rock/issues>
+- Artifact packaging (snap & rock): <https://github.com/canonical/valkey-artifacts/issues>
 
 When filing an issue, please include:
 

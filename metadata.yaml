@@ -38,7 +38,7 @@ resources:
   valkey-image:
     type: oci-image
     description: OCI Image for Valkey
-    upstream-source: ghcr.io/canonical/charmed-valkey:9.0.1-26.04_edge
+    upstream-source: ghcr.io/canonical/valkey-charmed:9.0.4-26.04_edge
 
 peers:
   valkey-peers:
@@ -79,16 +79,16 @@ requires:
 storage:
   data:
     type: filesystem
-    location: /var/snap/charmed-valkey/common/var/lib/valkey
+    location: /var/snap/valkey-charmed/common/var/lib/valkey
     description: storage for valkey data
     minimum-size: 1G
   logs:
     type: filesystem
-    location: /var/snap/charmed-valkey/common/var/log/valkey
+    location: /var/snap/valkey-charmed/common/var/log/valkey
     description: storage for logfiles of valkey server and sentinel
     minimum-size: 1G
   archive:
     type: filesystem
-    location: /var/snap/charmed-valkey/common/var/backups/valkey
+    location: /var/snap/valkey-charmed/common/var/backups/valkey
     description: storage for local backup files during transfer to/from remote object storage
     minimum-size: 1G

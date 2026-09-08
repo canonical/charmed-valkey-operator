@@ -229,14 +229,14 @@ jobs:
                 pebble changes; } > ~/logs/"$pod"-valkey-service.txt 2>&1
             done
           else
-            log_dir=/var/snap/charmed-valkey/common/var/log/valkey
+            log_dir=/var/snap/valkey-charmed/common/var/log/valkey
             for unit in $units; do
               name=${unit/\//-}
               { sudo juju ssh "$unit" "sudo cat $log_dir/valkey.log"; } \
                 > ~/logs/"$name"-valkey-server.txt 2>&1
               { sudo juju ssh "$unit" "sudo cat $log_dir/sentinel.log"; } \
                 > ~/logs/"$name"-valkey-sentinel.txt 2>&1
-              { sudo juju ssh "$unit" 'sudo snap logs charmed-valkey -n 500'; } \
+              { sudo juju ssh "$unit" 'sudo snap logs valkey-charmed -n 500'; } \
                 > ~/logs/"$name"-valkey-service.txt 2>&1
             done
           fi

@@ -162,6 +162,8 @@ class AuthManager(ManagerStatusProtocol):
         if not self.state.is_ldap_valid:
             return acl_content
 
+        self.state.unit_server.update({"ldap-sync-failed": False})
+
         # get non-LDAP users to avoid adding duplicate usernames to ACL files
         internal_users = [user.value for user in CharmUsers]
         client_users = []
@@ -212,6 +214,7 @@ class AuthManager(ManagerStatusProtocol):
             ldap_connection = self._get_ldap_connection()
         except ldap3.core.exceptions.LDAPException as e:
             logger.error("Could not get LDAP connection: %s", e)
+            self.state.unit_server.update({"ldap-sync-failed": True})
             return ldap_users
 
         base_dn = self.state.ldap.base_dn
@@ -232,9 +235,11 @@ class AuthManager(ManagerStatusProtocol):
                     ldap_group,
                     search_attribute,
                 )
+                self.state.unit_server.update({"ldap-sync-failed": True})
                 return ldap_users
         except ldap3.core.exceptions.LDAPException as e:
             logger.error("Could not get LDAP connection: %s", e)
+            self.state.unit_server.update({"ldap-sync-failed": True})
             return ldap_users
 
         for entry in ldap_connection.entries:
@@ -329,7 +334,10 @@ class AuthManager(ManagerStatusProtocol):
         if not self.state.unit_server.is_ldap_enabled:
             status_list.append(AuthStatuses.LDAP_NOT_ENABLED.value)
 
-        if self.state.unit_server.model.ldap_user_epoch < self.state.cluster.model.ldap_user_epoch:
+        if (
+            self.state.unit_server.model.ldap_user_epoch < self.state.cluster.model.ldap_user_epoch
+            or self.state.unit_server.model.ldap_sync_failed
+        ):
             status_list.append(AuthStatuses.LDAP_USER_SYNC_FAILED.value)
 
         return status_list if status_list else [CharmStatuses.ACTIVE_IDLE.value]
