@@ -12,8 +12,9 @@ The integrators store credentials. Charmed Valkey reads the credentials over the
 relation and never stores them in plain text.
 
 ```{caution}
-The storage integrators are mutually exclusive.
-Relating more than one blocks Charmed Valkey until you remove the extras.
+Only one storage integrator can be related at a time. Relating multiple
+integrators places Charmed Valkey in a blocked state until you remove the extra
+relations.
 ```
 
 ## S3-compatible object storage
@@ -133,21 +134,22 @@ Grant the service account permission to list, read, and write objects in the
 bucket. If the bucket does not exist yet, Charmed Valkey creates it, which also
 requires permission to create buckets in the project.
 
-Store the JSON key file in a
+Store the JSON key in a
 [Juju secret](https://canonical-juju.readthedocs-hosted.com/en/latest/user/reference/secret/)
-under the `secret-key` content key and grant access to the integrator. The
-`#file=` suffix reads the value from the file, so the key never appears on the
-command line:
+under the `secret-key` content key and grant access to the integrator:
 
 ```shell
 juju add-secret gcs-creds secret-key#file=service-account.json
 juju grant-secret gcs-creds gcs-integrator
 ```
 
+The `#file=` suffix tells Juju to read the value from the local file rather
+than from the command-line argument, keeping the private key out of your shell
+history.
+
 ```{note}
-Charmed Valkey accepts the key either as plain JSON or as base64-encoded JSON,
-so a key exported by another tool as a base64 string works without decoding it
-first.
+Charmed Valkey accepts service-account keys as plain JSON or base64-encoded JSON, so
+no decoding is required.
 ```
 
 Point the integrator at the secret and configure the bucket:
