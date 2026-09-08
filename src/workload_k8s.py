@@ -121,12 +121,12 @@ class ValkeyK8sWorkload(WorkloadBase):
         self.working_dir = self.root_dir / DATA_STORAGE_PATH
         self.log_dir = self.root_dir / LOG_STORAGE_PATH
         self.archive_dir = self.root_dir / ARCHIVE_STORAGE_PATH
-        self.lib_dir = self.root_dir / "lib"
+        self.lib_dir = self.root_dir / "usr/lib/valkey/modules"
         self.tls_dir = self.root_dir / "var/lib/valkey/tls"
         self.tls_paths: TLSPaths = TLSPaths(tls_root=self.tls_dir)
         self.valkey_service = "valkey"
-        self.sentinel_service = "valkey-sentinel"
-        self.metric_service = "metric_exporter"
+        self.sentinel_service = "sentinel"
+        self.metric_service = "metrics-exporter"
         self.cli = "valkey-cli"
         self.user = "_daemon_"
 
@@ -161,7 +161,7 @@ class ValkeyK8sWorkload(WorkloadBase):
                 self.metric_service: {
                     "override": "replace",
                     "summary": "Valkey metric exporter",
-                    "command": "bin/prometheus-redis-exporter",
+                    "command": "prometheus-redis-exporter",
                     "user": self.user,
                     "group": self.user,
                     "startup": "enabled",

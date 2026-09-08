@@ -25,8 +25,8 @@ from .helpers import APP_NAME, status_is
 CHARM_USER = "_daemon_"
 CONTAINER = "valkey"
 SERVICE_VALKEY = "valkey"
-SERVICE_METRIC_EXPORTER = "metric_exporter"
-SERVICE_SENTINEL = "valkey-sentinel"
+SERVICE_METRIC_EXPORTER = "metrics-exporter"
+SERVICE_SENTINEL = "sentinel"
 
 
 internal_passwords_secret = testing.Secret(
@@ -71,7 +71,7 @@ def test_start_primary(cloud_spec):
             SERVICE_METRIC_EXPORTER: {
                 "override": "replace",
                 "summary": "Valkey metric exporter",
-                "command": "bin/prometheus-redis-exporter",
+                "command": "prometheus-redis-exporter",
                 "user": CHARM_USER,
                 "group": CHARM_USER,
                 "startup": "enabled",

@@ -9,12 +9,12 @@ from enum import StrEnum
 CHARM = "valkey"
 CONTAINER = "valkey"
 
-SNAP_NAME = "charmed-valkey"
-SNAP_REVISIONS = {"x86_64": 49, "aarch64": 48}
+SNAP_NAME = "valkey-charmed"
+SNAP_REVISIONS = {"x86_64": 141, "aarch64": 143}
 SNAP_SERVICE = "server"
 SNAP_SENTINEL_SERVICE = "sentinel"
-SNAP_COMMON_PATH = "var/snap/charmed-valkey/common"
-SNAP_CURRENT_PATH = "var/snap/charmed-valkey/current"
+SNAP_COMMON_PATH = f"var/snap/{SNAP_NAME}/common"
+SNAP_CURRENT_PATH = f"var/snap/{SNAP_NAME}/current"
 SNAP_CONFIG_FILE = "etc/valkey/valkey.conf"
 SNAP_SENTINEL_CONFIG_FILE = "etc/valkey/sentinel.conf"
 SNAP_ACL_FILE = "etc/valkey/users.acl"

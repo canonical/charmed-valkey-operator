@@ -379,7 +379,7 @@ def download_client_certificate_from_unit(
         juju.scp(f"{unit}:{tls_path}/{TLS_KEY_FILE}", TLS_KEY_FILE, container="valkey")
         juju.scp(f"{unit}:{tls_path}/ca_certs/{TLS_CA_FILE}", TLS_CA_FILE, container="valkey")
     else:
-        tls_path = "/var/snap/charmed-valkey/current/tls"
+        tls_path = "/var/snap/valkey-charmed/current/tls"
         juju.scp(f"{unit}:{tls_path}/{TLS_CERT_FILE}", TLS_CERT_FILE)
         juju.scp(f"{unit}:{tls_path}/{TLS_KEY_FILE}", TLS_KEY_FILE)
         juju.scp(f"{unit}:{tls_path}/ca_certs/{TLS_CA_FILE}", TLS_CA_FILE)
