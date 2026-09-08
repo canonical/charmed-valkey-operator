@@ -4,16 +4,12 @@
 
 """End-to-end GCS backup/restore integration test against real Google Cloud Storage.
 
-Mirrors ``test_azure_backup.py`` (any-unit backup, list ordering, object
-presence, RDB magic, leader restore) against gcs-integrator, and checks the
-restored data: a key written before the backup and overwritten after it must
-come back with its pre-backup value on every unit. There is no
-emulator: gcs-integrator publishes no endpoint, so the charm can only reach
-storage.googleapis.com. The key comes from ``GCS_SERVICE_ACCOUNT`` and the
-bucket from ``GCS_BUCKET`` (see the ``gcs`` fixture in ``conftest.py``); a
-missing or empty key fails the module rather than skipping it.
+Same flow as ``test_azure_backup.py``, plus a data check: a key written before
+the backup and overwritten after it must come back on every unit. No emulator
+(gcs-integrator publishes no endpoint); the key comes from ``GCS_SERVICE_ACCOUNT``
+and the bucket from ``GCS_BUCKET``, see the ``gcs`` fixture.
 
-Runs on both substrates. Needs a bootstrapped Juju controller and a built charm:
+Needs a bootstrapped Juju controller and a built charm:
 
     export GCS_SERVICE_ACCOUNT="$(cat service_account.json)"
     tox run -e integration -- tests/integration/backup/test_gcs_backup.py --substrate k8s
@@ -48,8 +44,7 @@ def test_backup_list_and_restore(
     units = list(juju.status().get_units(APP_NAME))
     assert len(units) >= 3, units
 
-    # Data that only the restore can bring back: written before backup 0, then
-    # overwritten before the restore.
+    # Written before the backup, overwritten before the restore.
     write_key(juju, "gcs_restore_key", "original")
 
     # Backup from the first unit.
@@ -79,16 +74,14 @@ def test_backup_list_and_restore(
     assert any(backup_id_0 in n for n in names), names
     assert any(backup_id_1 in n for n in names), names
 
-    # Validate RDB magic bytes for the first object (ranged read, no checksum).
+    # Validate RDB magic bytes for the first object.
     name = next(n for n in names if backup_id_0 in n)
     head = gcs_bucket.blob(name).download_as_bytes(start=0, end=8)
     assert head.startswith(b"REDIS") or head.startswith(b"VALKEY"), head
 
-    # Overwrite the key so the restore has something visible to undo.
     write_key(juju, "gcs_restore_key", "mutated")
 
-    # Restore: the action is leader-only. Initiating it must succeed and the
-    # cluster must converge back to active/idle.
+    # Restore is leader-only; the cluster must converge back to active/idle.
     restore = juju.run(f"{APP_NAME}/leader", "restore", {"backup-id": backup_id_0})
     assert restore.success, restore.stderr
     assert "restore" in restore.results, f"Unexpected action results: {restore.results}"
@@ -99,7 +92,7 @@ def test_backup_list_and_restore(
         successes=3,
     )
 
-    # The bytes that came back from GCS are the pre-backup snapshot, on every unit.
+    # Every unit serves the pre-backup snapshot.
     for unit_name in juju.status().apps[APP_NAME].units:
         got = read_key(juju, unit_name, "gcs_restore_key")
         assert got == "original", f"Expected 'original' on {unit_name}, got {got!r}"

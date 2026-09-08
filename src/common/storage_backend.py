@@ -46,9 +46,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Every root the GCS SDK can raise past its own retries. InvalidResponse and
-# DataCorruption derive from plain Exception and reach us raw from the BlobWriter
-# path, which the SDK never wraps in _raise_from_invalid_response.
+# Every root the GCS SDK can raise. InvalidResponse and DataCorruption derive from
+# plain Exception and reach us unwrapped from the BlobWriter path.
 _GCS_ERRORS = (
     GoogleAPIError,
     GoogleAuthError,
@@ -405,32 +404,25 @@ class GCSBackend:
     """Google Cloud Storage via google-cloud-storage."""
 
     _CHUNK = 8 * 1024 * 1024
-    """Resumable-upload and ranged-read chunk: a multiple of 256 KiB, as the SDK
-    requires for resumable sessions, and the same size as S3's multipart part."""
+    """Upload/read chunk: a multiple of 256 KiB (SDK requirement), same as S3's part size."""
 
     def __init__(self, params: "GCSParameters"):
         self.params = params
 
     @property
     def location(self) -> str:
-        """Bucket and prefix -- the audit trail's destination.
-
-        No host in a ``gs://`` locator, so no userinfo can ever reach the log.
-        """
+        """Bucket and prefix -- the audit trail's destination (no credentials)."""
         return f"gs://{self.params.bucket}/{self.params.path}"
 
     def _service_account_info(self) -> dict:
-        """Parse the service-account key. GCSParameters canonicalised it to JSON."""
+        """Parse the service-account key (GCSParameters stored it as JSON text)."""
         return json.loads(self.params.secret_key)
 
     def _client(self) -> storage.Client:
         """Build a client from the service-account key -- every call starts here.
 
-        ``project`` is passed explicitly for clarity (the SDK would also take it
-        from the key). No env vars, no Application Default Credentials.
-
-        cryptography rejects a PEM body it cannot parse with a bare ValueError;
-        its message names the format, never the key material.
+        cryptography rejects an unparsable PEM with a bare ValueError; its
+        message names the format, never the key material.
         """
         service_account_info = self._service_account_info()
         try:
@@ -454,15 +446,11 @@ class GCSBackend:
 
     @staticmethod
     def _error_code(exc: BaseException) -> str:
-        """Structured code of an SDK failure: the exception class name.
+        """Safe code for an SDK failure: the exception class name, never ``str(exc)``.
 
-        ``Forbidden``, ``NotFound``, ``PreconditionFailed``, ``RefreshError`` --
-        stable and structured, unlike ``str(exc)``, which the SDK formats as
-        ``<status> <verb> <url>: <message>`` and which must never reach a
-        world-readable action result. Two normalisations first: a ``RetryError``
-        is named after its cause (a 503 storm reads ``ServiceUnavailable``), and
-        an ``InvalidResponse`` from the resumable-media layer carries only an
-        HTTP status, mapped to the api_core class of that status.
+        ``str(exc)`` carries the request URL. A ``RetryError`` is named after
+        its cause; an ``InvalidResponse`` (HTTP status only) is mapped to the
+        api_core class for that status.
         """
         if isinstance(exc, RetryError) and exc.cause is not None:
             exc = exc.cause
@@ -516,25 +504,16 @@ class GCSBackend:
     def upload(self, backup_id: str, reader: IO[bytes]) -> None:
         """Stream ``reader`` into the object for ``backup_id`` (resumable upload).
 
-        ``blob.open("wb")`` rather than ``upload_from_file``: the SDK's uploader
-        calls ``tell()`` on its source, and the source here is a non-rewindable
-        pipe from ``valkey-cli --rdb -``. The writer buffers ``_CHUNK`` bytes and
-        drives the resumable session itself, so the pipe is only ever ``read()``.
+        ``blob.open("wb")`` rather than ``upload_from_file``: the source is a
+        non-rewindable pipe from ``valkey-cli --rdb -``, and the SDK's uploader
+        needs ``tell()``. The writer buffers chunks and only ever ``read()``s.
 
-        ``if_generation_match=0`` goes on the session-initiate request, so a
-        colliding id fails before any RDB bytes leave the unit. On success the
-        final chunk carries the SDK's own checksum (md5 on this build), which GCS
-        verifies.
+        ``if_generation_match=0`` makes a colliding id fail at session start,
+        before any RDB bytes leave the unit.
 
-        Two cancellation paths, both needed. ``__exit__`` terminates the session
-        for an exception raised inside the block. But for an RDB under one chunk
-        the session is initiated and its only chunk sent from ``close()``, i.e.
-        inside ``__exit__`` on the success path; a failure there leaves the
-        buffer open, and ``io.IOBase.__del__`` would re-send it at GC -- a commit
-        after the action reported failure -- so the writer is terminated here.
-        The cancel itself is best-effort: its DELETE can fail for the same
-        network reason the upload did, and the original error is the one the
-        action must report.
+        A failure inside ``close()`` (the final chunk) escapes the ``with``
+        without cancelling the session, and ``__del__`` would then re-send the
+        buffered chunk at GC. So the writer is terminated explicitly as well.
         """
         try:
             writer = self._blob(backup_id).open(
@@ -542,15 +521,11 @@ class GCSBackend:
             )
             try:
                 with writer:
-                    # blob.open("wb") is typed as a union of read/write/text
-                    # handles (no py.typed in google-cloud-storage), but "wb"
-                    # always returns a BlobWriter, which is binary-writable.
+                    # "wb" always returns a binary BlobWriter; the SDK's type hint is a union.
                     shutil.copyfileobj(reader, writer, self._CHUNK)  # pyright: ignore[reportArgumentType]
             except BaseException:
                 if not writer.closed:
-                    # Best-effort: the DELETE that cancels the session can fail for
-                    # the same reason the upload did, and the original error is the
-                    # one the action must report.
+                    # Best-effort: the original error is the one the action must report.
                     try:
                         writer.terminate()  # pyright: ignore[reportAttributeAccessIssue]
                     except Exception as e:
@@ -573,9 +548,7 @@ class GCSBackend:
             raise StorageBackendError(
                 f"No object for backup-id {backup_id}", safe_code=NotFound.__name__
             )
-        # get_blob populated the metadata, so the restore trail gets its byte
-        # count without a second round trip. The reader disables checksums for
-        # its own ranged reads.
+        # get_blob already fetched the metadata, so the size costs no extra round trip.
         return RemoteObject(cast(BinaryIO, blob.open("rb", chunk_size=self._CHUNK)), blob.size)
 
     def delete(self, backup_id: str) -> None:

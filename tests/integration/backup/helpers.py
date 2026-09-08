@@ -240,24 +240,16 @@ def deploy_and_relate_gcs(
 ) -> None:
     """Deploy the local valkey charm + gcs-integrator, wire creds, and relate them.
 
-    Mirrors ``deploy_and_relate_azure``: idempotent, each step skipped when
-    already done, so it is safe to call at the top of every test and again after
-    a redeploy. The integrator setup is guarded on the integrator app's presence,
-    and the valkey app is (re)deployed and (re)related on its own.
-
-    The `gcs` fixture mints a fresh path prefix per run, so a model left over
-    from an earlier run keeps the *old* prefix in the integrator's config
-    (`juju remove-application gcs-integrator` + `juju remove-secret gcs-creds`
-    between runs, or backups land where the test does not look).
+    Idempotent, like ``deploy_and_relate_azure``. The `gcs` fixture mints a
+    fresh path prefix per run, so remove `gcs-integrator` and the `gcs-creds`
+    secret between local runs, or backups land where the test does not look.
     """
     status = juju.status()
 
     if GCS_INTEGRATOR_APP not in status.apps:
         juju.deploy(GCS_INTEGRATOR_APP, channel="1/stable")
-        # gcs-integrator takes the service-account key as a Juju secret (content
-        # key `secret-key`, published verbatim): create + grant it, then point
-        # `credentials` at its URI. jubilant writes the content through a temp
-        # YAML file, so a JSON value with quotes and braces round-trips.
+        # The key goes in as a Juju secret (content key `secret-key`) that the
+        # integrator's `credentials` option points at.
         creds = juju.add_secret(
             name=GCS_CREDS_SECRET,
             content={"secret-key": gcs["secret-key"]},
@@ -268,9 +260,7 @@ def deploy_and_relate_gcs(
             {
                 "credentials": creds,
                 "bucket": gcs["bucket"],
-                # Required by the charm even though the integrator defaults it to
-                # "": an empty prefix would let list-backups enumerate the whole
-                # bucket.
+                # The charm requires a path; the integrator defaults it to "".
                 "path": gcs["path"],
             },
         )
@@ -284,10 +274,6 @@ def deploy_and_relate_gcs(
             trust=True,
         )
 
-    # Require agents idle as well as workloads active: after `integrate` the
-    # workloads stay active while the leader's relation hooks (ensure_container +
-    # credential storage) are still running, so a workload-only wait can return
-    # before GCS is actually wired up.
     juju.wait(
         lambda status: are_apps_active_and_agents_idle(
             status, APP_NAME, GCS_INTEGRATOR_APP, idle_period=30

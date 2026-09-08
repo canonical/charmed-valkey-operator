@@ -649,10 +649,7 @@ def test_azurebackend_container_client_works_for_a_path_style_endpoint(mocker):
 
 
 def _gcs_key(**overrides) -> str:
-    """Build a syntactically complete service-account key.
-
-    The PEM body is a stub that the mocked SDK never parses.
-    """
+    """Build a complete service-account key; the PEM body is a stub."""
     info = {
         "type": "service_account",
         "project_id": "proj",
@@ -672,11 +669,7 @@ def _gcs_params(**overrides):
 
 
 def _gcs_backend(mocker, **overrides):
-    """Build a GCSBackend with its storage.Client faked; return (backend, client).
-
-    The blob's writer is a context manager that re-raises (``__exit__`` -> False),
-    as the real one does.
-    """
+    """Build a GCSBackend with its storage.Client faked; return (backend, client)."""
     client = mocker.MagicMock()
     bucket = mocker.MagicMock()
     client.bucket.return_value = bucket
@@ -689,11 +682,7 @@ def _gcs_backend(mocker, **overrides):
 
 
 def _invalid_response(status: int):
-    """Build an InvalidResponse as the resumable-media layer raises it on a bad status.
-
-    That layer is what BlobWriter drives directly, unwrapped by the SDK's
-    `_raise_from_invalid_response`, so the backend has to translate it.
-    """
+    """Build the InvalidResponse the BlobWriter path raises on a bad status."""
     response = requests.Response()
     response.status_code = status
     return InvalidResponse(
@@ -729,11 +718,7 @@ def test_gcsbackend_client_passes_project_none_when_the_key_has_none(mocker):
 
 
 def test_gcsbackend_client_translates_an_unparsable_private_key(mocker):
-    """Cryptography rejects a PEM body it cannot parse with a bare ValueError.
-
-    That happens at client construction; it is the only ValueError the backend
-    translates.
-    """
+    """An unparsable PEM raises a bare ValueError at client construction."""
     mocker.patch.object(
         storage_backend.storage.Client,
         "from_service_account_info",
@@ -863,12 +848,7 @@ def test_gcsbackend_head_wraps_errors(mocker):
 
 
 def test_gcsbackend_upload_streams_through_a_blob_writer(mocker):
-    """blob.open("wb") as a context manager, not upload_from_file.
-
-    The resumable uploader calls tell() on its source, and the source is a
-    non-rewindable pipe. No checksum kwarg: the SDK default (md5 on this
-    build) is what GCS verifies.
-    """
+    """blob.open("wb") as a context manager; no checksum kwarg (SDK default)."""
     backend, client = _gcs_backend(mocker)
     blob = client.bucket.return_value.blob.return_value
     writer = blob.open.return_value
@@ -885,13 +865,7 @@ def test_gcsbackend_upload_streams_through_a_blob_writer(mocker):
 
 
 def test_gcsbackend_upload_refuses_to_replace_an_existing_object(mocker):
-    """if_generation_match=0 makes the session-initiate fail on a colliding id.
-
-    The writer path raises the resumable-media InvalidResponse, not an
-    api_core error, so it is mapped to the status's class: 412 ->
-    PreconditionFailed. The block exits on the exception, which is what
-    cancels the session.
-    """
+    """A colliding id fails at session start with a 412 mapped to PreconditionFailed."""
     backend, client = _gcs_backend(mocker)
     writer = client.bucket.return_value.blob.return_value.open.return_value
     writer.write.side_effect = _invalid_response(412)
@@ -903,11 +877,7 @@ def test_gcsbackend_upload_refuses_to_replace_an_existing_object(mocker):
 
 
 def test_gcsbackend_upload_lets_a_reader_failure_propagate_through_the_block(mocker):
-    """A producer that dies mid-stream is not an SDK error.
-
-    It propagates untouched to the manager's catch-all, and the block exits
-    on it (terminate), so no truncated object is committed.
-    """
+    """A producer that dies mid-stream propagates raw; the session is cancelled."""
     backend, client = _gcs_backend(mocker)
     writer = client.bucket.return_value.blob.return_value.open.return_value
     reader = mocker.MagicMock()
@@ -928,13 +898,7 @@ def _real_blob_writer(mocker, chunk_size):
 
 
 def test_blobwriter_context_manager_cancels_the_session_on_error(mocker):
-    """Pin the SDK semantics that upload() relies on.
-
-    An exception inside the block cancels the session after the chunks
-    already sent, and never transmits the buffered remainder. (An abandoned
-    writer would: io.IOBase.__del__ calls close(), which commits whatever is
-    buffered as the final chunk.)
-    """
+    """An error inside the block cancels the session; the buffered rest is never sent."""
     chunk = 256 * 1024
     writer, upload, transport = _real_blob_writer(mocker, chunk)
 
@@ -949,10 +913,7 @@ def test_blobwriter_context_manager_cancels_the_session_on_error(mocker):
 
 
 def test_blobwriter_context_manager_commits_on_success(mocker):
-    """A clean exit sends the final (short) chunk.
-
-    The precondition rode on the initiate call.
-    """
+    """A clean exit sends the final chunk; the precondition rode on the initiate."""
     chunk = 256 * 1024
     writer, upload, transport = _real_blob_writer(mocker, chunk)
 
@@ -967,14 +928,7 @@ def test_blobwriter_context_manager_commits_on_success(mocker):
 
 
 def test_gcsbackend_upload_terminates_a_writer_that_failed_in_close(mocker):
-    """For an RDB under one chunk, the session's only chunk is sent from close().
-
-    That is, inside __exit__ on the success path. A failure there is raised
-    by __exit__ itself, so the with statement does not terminate; the buffer
-    would stay open and io.IOBase.__del__ would re-send the chunk at GC -- a
-    commit after the action reported failure. upload() terminates the writer
-    itself in that case (real BlobWriter, fake blob).
-    """
+    """A failure inside close() escapes the with block; upload() still cancels the session."""
     chunk = 256 * 1024
     backend, client = _gcs_backend(mocker)
     backend._CHUNK = chunk
@@ -988,17 +942,13 @@ def test_gcsbackend_upload_terminates_a_writer_that_failed_in_close(mocker):
     assert excinfo.value.safe_code == "ServiceUnavailable"
     assert writer.closed
     transport.delete.assert_called_once_with(upload.upload_url)
-    # A later close() -- what io.IOBase.__del__ does at GC -- is now a no-op.
+    # A later close() (what __del__ does at GC) must not re-send the chunk.
     writer.close()
     assert upload.transmit_next_chunk.call_count == 1
 
 
 def test_gcsbackend_upload_keeps_the_original_error_when_terminate_fails(mocker):
-    """Cancelling a failed upload is best-effort.
-
-    The DELETE can fail for the same reason the upload did; the action must
-    still report the upload's code, not the cancel's.
-    """
+    """A failed cancel must not replace the upload's own error code."""
     chunk = 256 * 1024
     backend, client = _gcs_backend(mocker)
     backend._CHUNK = chunk
@@ -1081,11 +1031,7 @@ def test_gcsbackend_safe_code_is_the_class_name_never_the_message(mocker):
 
 
 def test_gcsbackend_safe_code_normalises_retry_and_invalid_response(mocker):
-    """RetryError hides its cause behind a generic name.
-
-    InvalidResponse carries only an HTTP status. Both are mapped to the
-    status's api_core class.
-    """
+    """RetryError reads as its cause; InvalidResponse as its status's api_core class."""
     assert GCSBackend._error_code(RetryError("deadline", ServiceUnavailable("503"))) == (
         "ServiceUnavailable"
     )
@@ -1102,12 +1048,7 @@ def test_gcsbackend_safe_code_normalises_retry_and_invalid_response(mocker):
 
 
 def test_gcsbackend_wraps_every_sdk_root(mocker):
-    """api_core, google-auth, resumable-media and requests are the roots the SDK can raise.
-
-    That is, past its own retries; each must become a StorageBackendError
-    with a structured code, or a raw exception escapes create_backup's
-    handlers.
-    """
+    """Every SDK exception root becomes a StorageBackendError with a code."""
     cases = [
         (requests.ConnectionError("unreachable"), "ConnectionError"),
         (RefreshError("invalid_grant: Invalid JWT Signature."), "RefreshError"),

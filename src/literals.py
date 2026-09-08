@@ -45,9 +45,7 @@ GCS_RELATION_NAME = "gcs-credentials"
 AZURE_HTTPS_PROTOCOLS = frozenset({"https", "wasbs"})
 AZURE_HTTP_PROTOCOLS = frozenset({"http", "wasb"})
 AZURE_REJECTED_PROTOCOLS = frozenset({"abfs", "abfss"})
-# gcs-integrator storage-class values. Applied only when the charm creates the
-# bucket; anything else is refused at the relation boundary rather than by the
-# SDK at bucket creation.
+# gcs-integrator storage-class values; applied only when the charm creates the bucket.
 GCS_STORAGE_CLASSES = frozenset({"STANDARD", "NEARLINE", "COLDLINE", "ARCHIVE"})
 # Every backup backend: its integrator relation -> the app databag field its
 # validated credentials envelope is stored under. Relation discovery, the
@@ -63,8 +61,7 @@ BACKUP_ID_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 # generated id. Ids have one-second resolution, so two units starting a backup
 # in the same second would otherwise replace each other's snapshot.
 BACKUP_EXISTS_CODE = "BackupAlreadyExists"
-# Structured code for a GCS service-account key whose PEM body the SDK cannot
-# parse; the underlying error is a bare ValueError from cryptography.
+# Action error code for a GCS service-account key the SDK cannot parse.
 GCS_INVALID_KEY_CODE = "InvalidServiceAccountKey"
 BACKUP_CA_FILENAME = "s3_ca_chain.pem"
 PRE_RESTORE_SUFFIX = ".pre-restore"

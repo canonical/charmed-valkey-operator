@@ -26,8 +26,7 @@ object-storage-charmlib = "^1.0.0"
 # >=12.15 for StorageStreamDownloader.read(), which the restore path streams through
 azure-storage-blob = "^12.19"
 google-cloud-storage = "^3.13"
-# A hard dependency of google-cloud-storage, imported directly for its
-# exception root (requests.RequestException) in the GCS backend.
+# Imported directly by the GCS backend for requests.RequestException.
 requests = ">=2.22"
 
 [tool.poetry.requires-plugins]

@@ -266,21 +266,18 @@ def azure_container(azurite: dict):
 
 
 # ── Google Cloud Storage (real) ───────────────────────────────────────────────
-# Not an emulator: gcs-integrator publishes no endpoint, so the charm can only
-# ever talk to storage.googleapis.com. Objects land under a per-run prefix in
-# the shared test bucket and are cleaned up on teardown.
+# No emulator: gcs-integrator publishes no endpoint. Objects land under a per-run
+# prefix in the shared test bucket and are cleaned up on teardown.
 GCS_SERVICE_ACCOUNT_ENV = "GCS_SERVICE_ACCOUNT"
 GCS_BUCKET_ENV = "GCS_BUCKET"
 GCS_DEFAULT_BUCKET = "data-charms-testing"
 
 
 def _service_account_info(value: str) -> dict:
-    """Decode the service-account key the way the charm does.
+    """Decode the key (JSON or base64 JSON) the way the charm does.
 
-    The env value is handed to the integrator verbatim (JSON or base64 JSON) and
-    only decoded here, for the test's own client. Inner whitespace is dropped
-    first: `base64` without -w0 wraps at 76 columns, and spread's env export
-    turns those newlines into spaces.
+    The env value goes to the integrator verbatim; only the test's own client
+    decodes it here.
     """
     try:
         return json.loads(value)
@@ -293,9 +290,8 @@ def _service_account_info(value: str) -> dict:
 def gcs(substrate: Substrate) -> dict:
     """Return the gcs envelope: a per-run prefix in the shared test bucket.
 
-    A missing or empty key is a hard failure, never a skip: a silently skipped
-    module looks green in CI forever. Empty, not just missing, because an
-    ungranted GitHub secret expands to "" through `secrets: inherit`.
+    A missing or empty key fails, never skips: a skipped module looks green in
+    CI forever (an ungranted GitHub secret expands to "").
     """
     value = os.environ.get(GCS_SERVICE_ACCOUNT_ENV, "")
     if not value:
@@ -312,14 +308,7 @@ def gcs(substrate: Substrate) -> dict:
 
 @pytest.fixture(scope="module")
 def gcs_bucket(gcs: dict):
-    """Return a google-cloud-storage Bucket for the test bucket; clean the prefix after.
-
-    Built the way the charm's GCSBackend builds its client (service-account
-    info, explicit project), so the test inspects the very store the charm
-    writes to. Teardown deletes every object under this run's prefix so the
-    shared bucket does not accumulate RDB snapshots (a run killed by the CI step
-    timeout skips this; an object-lifecycle rule on the bucket is the backstop).
-    """
+    """Return a Bucket handle for the test bucket; delete this run's prefix after."""
     info = _service_account_info(gcs["secret-key"])
     client = storage.Client.from_service_account_info(info, project=info.get("project_id"))
     bucket = client.bucket(gcs["bucket"])
@@ -328,4 +317,4 @@ def gcs_bucket(gcs: dict):
         try:
             blob.delete()
         except NotFound:
-            pass  # a concurrent cleanup got there first; the goal is an empty prefix
+            pass  # already gone

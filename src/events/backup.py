@@ -264,11 +264,7 @@ class BackupEvents(ops.Object):
         | StorageConnectionInfoGoneEvent
         | ops.LeaderElectedEvent,
     ) -> None:
-        """Handle initial and updated GCS integrator credentials.
-
-        The lib json-decodes every published field, so ``secret-key`` arrives as
-        a dict; ``GCSParameters`` canonicalises it back to JSON text.
-        """
+        """Handle initial and updated GCS integrator credentials."""
         if not (gcs_info := self.gcs_requirer.get_storage_connection_info()):
             return
         logger.info("GCS credentials changed; refreshing backup configuration")
@@ -281,8 +277,7 @@ class BackupEvents(ops.Object):
             event.defer()
             return
 
-        # The endpoint CA is an S3-only concept (the gcs interface carries no CA
-        # field), so there is nothing on disk to remove here.
+        # No CA on disk for GCS, unlike S3.
         if self.charm.unit.is_leader():
             self.charm.state.cluster.update({"gcs_credentials": ""})
 

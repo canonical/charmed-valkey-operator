@@ -205,21 +205,14 @@ class AzureStorageParameters(BaseModel):
 class GCSParameters(BaseModel):
     """Validated, normalised GCS parameters from the gcs relation.
 
-    Parses the gcs-integrator payload (hyphenated keys) into typed attributes,
-    trimming whitespace and the separators that would corrupt object names, and
-    rejecting a payload missing a required field or whose bucket/path strip to
-    empty. ``path`` is required at the charm layer even though the lib contract
-    leaves it optional, so listing can never enumerate the whole bucket.
+    Same rules as ``AzureStorageParameters``: hyphenated keys, whitespace and
+    separators trimmed, ``path`` required so listing never enumerates the whole
+    bucket, unknown fields ignored.
 
-    ``secret-key`` is the service-account key. The requirer lib json.loads every
-    published field, so it usually arrives as a dict; a user may also have stored
-    it base64-encoded. Every accepted form is canonicalised to JSON text, so the
-    stored envelope stays a flat JSON document like the other backends' and
-    compares stably. Unknown integrator fields are ignored.
-
-    ``hide_input_in_errors``: a validation error on the key must not echo the
-    key -- ``_store_credentials`` logs the error, and with a dict input pydantic
-    would otherwise print the whole thing.
+    ``secret-key`` is the service-account key: a dict (the lib json-decodes
+    every field), JSON text, or base64 JSON. It is stored as canonical JSON
+    text. ``hide_input_in_errors`` keeps the key out of the logged validation
+    error.
     """
 
     model_config = ConfigDict(populate_by_name=True, extra="ignore", hide_input_in_errors=True)
@@ -238,9 +231,7 @@ class GCSParameters(BaseModel):
     @field_validator("secret_key", mode="before")
     @classmethod
     def _coerce_service_account_key(cls, value: object) -> object:
-        # dict (from the lib), JSON text, or base64 JSON (either alphabet; CI
-        # secret plumbing cannot carry raw JSON) -> canonical JSON text. Only
-        # field names go into error messages: the value is a private key.
+        # Error messages name the field only: the value is a private key.
         if isinstance(value, dict):
             return json.dumps(value, sort_keys=True)
         if not isinstance(value, str):
@@ -251,8 +242,7 @@ class GCSParameters(BaseModel):
         try:
             info = json.loads(text)
         except json.JSONDecodeError:
-            # `base64` without -w0 wraps at 76 columns, and spread's env export
-            # turns those newlines into spaces; validate=True refuses both.
+            # Drop the line wrapping `base64` adds by default.
             packed = "".join(text.split())
             try:
                 info = json.loads(base64.b64decode(packed, altchars=b"-_", validate=True))
@@ -262,8 +252,7 @@ class GCSParameters(BaseModel):
                 ) from None
         if not isinstance(info, dict):
             raise ValueError("secret-key is not a JSON object")
-        # sort_keys: canonical means canonical -- the same key re-supplied in a
-        # different order must compare equal to the stored envelope.
+        # sort_keys: the same key in another order must equal the stored envelope.
         return json.dumps(info, sort_keys=True)
 
     @field_validator("bucket", "path")
@@ -285,8 +274,7 @@ class GCSParameters(BaseModel):
     @field_validator("secret_key")
     @classmethod
     def _require_a_service_account_key(cls, value: str) -> str:
-        # Refuse an incomplete key at the relation boundary rather than at the
-        # first upload with a 400 from Google's token endpoint.
+        # What the SDK needs to sign a token; refuse here, not at the first upload.
         if not value:
             return value  # _reject_empty reports it
         info = json.loads(value)  # canonical JSON object by now
@@ -298,8 +286,7 @@ class GCSParameters(BaseModel):
     @field_validator("storage_class")
     @classmethod
     def _require_a_known_storage_class(cls, value: str | None) -> str | None:
-        # Matched against the integrator's documented set, upper-cased; an empty
-        # string (the integrator's default) reads as "not requested".
+        # Empty (the integrator's default) reads as "not requested".
         if not value:
             return None
         upper = value.upper()
