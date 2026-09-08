@@ -2,7 +2,7 @@
 # Copyright 2026 Canonical Ltd.
 # See LICENSE file for licensing details.
 
-"""Fixtures for object-storage backup tests: S3 (MicroCeph) and Azure (Azurite).
+"""Fixtures for object-storage backup tests: S3 (MicroCeph), Azure (Azurite), GCS (real).
 
 MicroCeph's RGW is fronted with a self-signed TLS certificate generated here,
 so the suite exercises the charm's full S3-over-TLS path (CA-chain
@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import secrets
 import socket
 import subprocess
@@ -30,6 +31,10 @@ import pytest
 from azure.core.exceptions import ResourceExistsError
 from azure.storage.blob import ContainerClient
 from botocore.config import Config
+from google.api_core.exceptions import NotFound
+from google.cloud import storage
+
+from literals import Substrate
 
 RGW_SSL_PORT = 445
 # Self-signed cert + key, persisted so repeated local runs reuse the exact
@@ -258,3 +263,58 @@ def azure_container(azurite: dict):
     except ResourceExistsError:
         pass  # re-run against an already-created container
     return container
+
+
+# ── Google Cloud Storage (real) ───────────────────────────────────────────────
+# No emulator: gcs-integrator publishes no endpoint. Objects land under a per-run
+# prefix in the shared test bucket and are cleaned up on teardown.
+GCS_SERVICE_ACCOUNT_ENV = "GCS_SERVICE_ACCOUNT"
+GCS_BUCKET_ENV = "GCS_BUCKET"
+GCS_DEFAULT_BUCKET = "data-charms-testing"
+
+
+def _service_account_info(value: str) -> dict:
+    """Decode the key (JSON or base64 JSON) the way the charm does.
+
+    The env value goes to the integrator verbatim; only the test's own client
+    decodes it here.
+    """
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        packed = "".join(value.split())
+        return json.loads(base64.b64decode(packed, altchars=b"-_", validate=True))
+
+
+@pytest.fixture(scope="module")
+def gcs(substrate: Substrate) -> dict:
+    """Return the gcs envelope: a per-run prefix in the shared test bucket.
+
+    A missing or empty key fails, never skips: a skipped module looks green in
+    CI forever (an ungranted GitHub secret expands to "").
+    """
+    value = os.environ.get(GCS_SERVICE_ACCOUNT_ENV, "")
+    if not value:
+        pytest.fail(
+            f"{GCS_SERVICE_ACCOUNT_ENV} is unset or empty; the GCS module needs a "
+            "service-account key (JSON or base64 JSON) and never skips"
+        )
+    return {
+        "bucket": os.environ.get(GCS_BUCKET_ENV, GCS_DEFAULT_BUCKET),
+        "path": f"valkey-{substrate}-{secrets.token_hex(4)}",
+        "secret-key": value,
+    }
+
+
+@pytest.fixture(scope="module")
+def gcs_bucket(gcs: dict):
+    """Return a Bucket handle for the test bucket; delete this run's prefix after."""
+    info = _service_account_info(gcs["secret-key"])
+    client = storage.Client.from_service_account_info(info, project=info.get("project_id"))
+    bucket = client.bucket(gcs["bucket"])
+    yield bucket
+    for blob in client.list_blobs(gcs["bucket"], prefix=f"{gcs['path']}/"):
+        try:
+            blob.delete()
+        except NotFound:
+            pass  # already gone

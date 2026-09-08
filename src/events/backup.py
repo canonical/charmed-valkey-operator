@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 import ops
 from object_storage import (
     AzureStorageRequirer,
+    GCSRequirer,
     S3Requirer,
     StorageConnectionInfoChangedEvent,
     StorageConnectionInfoGoneEvent,
@@ -27,10 +28,11 @@ from common.exceptions import (
     ValkeyRestoreError,
     ValkeyWorkloadCommandError,
 )
-from core.models import AzureStorageParameters, BackupCredentials, S3Parameters
+from core.models import AzureStorageParameters, BackupCredentials, GCSParameters, S3Parameters
 from literals import (
     AZURE_RELATION_NAME,
     BACKUP_CREDENTIAL_FIELDS,
+    GCS_RELATION_NAME,
     PEER_RELATION,
     RESTORE_LOAD_TIMEOUT_S,
     RESTORE_RESYNC_TIMEOUT_S,
@@ -81,12 +83,22 @@ class BackupEvents(ops.Object):
             self.azure_requirer.on.storage_connection_info_gone,
             self._on_azure_credentials_gone,
         )
+        self.gcs_requirer = GCSRequirer(self.charm, GCS_RELATION_NAME)
+        self.framework.observe(
+            self.gcs_requirer.on.storage_connection_info_changed,
+            self._on_gcs_credentials_changed,
+        )
+        self.framework.observe(
+            self.gcs_requirer.on.storage_connection_info_gone,
+            self._on_gcs_credentials_gone,
+        )
         # Every backend's changed path, keyed by its relation: used to re-drive the
         # others when one integrator goes away and un-blocks them. Keys must cover
         # BACKUP_CREDENTIAL_FIELDS or a registered backend never converges.
         self._credentials_changed_handlers = {
             S3_RELATION_NAME: self._on_s3_credentials_changed,
             AZURE_RELATION_NAME: self._on_azure_credentials_changed,
+            GCS_RELATION_NAME: self._on_gcs_credentials_changed,
         }
         # Recover credentials when leadership moves; each handler early-returns if
         # its requirer has no info, so firing them all on leader-elected is safe.
@@ -245,6 +257,31 @@ class BackupEvents(ops.Object):
             self.charm.state.cluster.update({"azure_credentials": ""})
 
         self._reconcile_other_backends(event, exclude=AZURE_RELATION_NAME)
+
+    def _on_gcs_credentials_changed(
+        self,
+        event: StorageConnectionInfoChangedEvent
+        | StorageConnectionInfoGoneEvent
+        | ops.LeaderElectedEvent,
+    ) -> None:
+        """Handle initial and updated GCS integrator credentials."""
+        if not (gcs_info := self.gcs_requirer.get_storage_connection_info()):
+            return
+        logger.info("GCS credentials changed; refreshing backup configuration")
+        self._store_credentials(dict(gcs_info), GCSParameters, "gcs_credentials", event)
+
+    def _on_gcs_credentials_gone(self, event: StorageConnectionInfoGoneEvent) -> None:
+        """Handle removal of the GCS credentials relation."""
+        if self._backup_or_restore_in_progress():
+            logger.warning("Backup or restore in progress; deferring credentials_gone")
+            event.defer()
+            return
+
+        # No CA on disk for GCS, unlike S3.
+        if self.charm.unit.is_leader():
+            self.charm.state.cluster.update({"gcs_credentials": ""})
+
+        self._reconcile_other_backends(event, exclude=GCS_RELATION_NAME)
 
     def _on_create_backup_action(self, event: ops.ActionEvent) -> None:
         """Run a streaming RDB backup of this unit's Valkey instance to object storage."""

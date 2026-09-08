@@ -67,6 +67,10 @@ requires:
     interface: azure_storage
     limit: 1
     optional: true
+  gcs-credentials:
+    interface: gcs
+    limit: 1
+    optional: true
   ldap-ca-cert:
     interface: certificate_transfer
     limit: 1

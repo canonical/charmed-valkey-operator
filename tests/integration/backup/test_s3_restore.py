@@ -28,7 +28,12 @@ from tenacity import Retrying, stop_after_delay, wait_fixed
 
 from literals import PRIMARY_NAME, SENTINEL_DOWN_AFTER_MS, CharmUsers, Substrate
 from statuses import RestoreStatuses
-from tests.integration.backup.helpers import BACKUP_ID_RE, deploy_and_relate_s3
+from tests.integration.backup.helpers import (
+    BACKUP_ID_RE,
+    deploy_and_relate_s3,
+    read_key,
+    write_key,
+)
 from tests.integration.ha.helpers.helpers import get_unit_name_from_primary_ip
 from tests.integration.helpers import (
     APP_NAME,
@@ -62,35 +67,6 @@ def _wait_restore_active(juju: jubilant.Juju) -> None:
         delay=5,
         successes=3,
     )
-
-
-def _write_key(juju: jubilant.Juju, key: str, value: str) -> None:
-    """Write *key=value* to the Valkey primary via valkey-cli."""
-    password = get_password(juju)
-    primary_ip = get_primary_ip(juju, APP_NAME)
-    exec_valkey_cli(
-        primary_ip,
-        username=CharmUsers.VALKEY_ADMIN.value,
-        password=password,
-        command=f"SET {key} {value}",
-    )
-
-
-def _read_key(juju: jubilant.Juju, unit_name: str, key: str) -> str | None:
-    """GET *key* from the named unit; returns None for missing keys."""
-    status = juju.status()
-    model_info = juju.show_model()
-    unit = status.apps[APP_NAME].units[unit_name]
-    # K8s: use pod IP; VM: use public address (mirrors get_cluster_addresses logic).
-    address = unit.address if model_info.type == "kubernetes" else unit.public_address
-    password = get_password(juju)
-    result = exec_valkey_cli(
-        address,
-        username=CharmUsers.VALKEY_ADMIN.value,
-        password=password,
-        command=f"GET {key}",
-    )
-    return result.stdout if result.stdout else None
 
 
 def _leader_unit_name(juju: jubilant.Juju) -> str:
@@ -161,7 +137,7 @@ def test_restore_rollback(
     """Write data -> backup -> mutate -> restore -> original value is back on all units."""
     deploy_and_relate_s3(juju, charm, substrate, microceph)
 
-    _write_key(juju, "restore_test_key", "original")
+    write_key(juju, "restore_test_key", "original")
 
     task = juju.run(f"{APP_NAME}/leader", "create-backup")
     assert task.success, task.stderr
@@ -169,7 +145,7 @@ def test_restore_rollback(
     assert BACKUP_ID_RE.match(backup_id), f"Unexpected backup-id format: {backup_id!r}"
 
     # Overwrite the key so the restore has something visible to undo.
-    _write_key(juju, "restore_test_key", "mutated")
+    write_key(juju, "restore_test_key", "mutated")
 
     # restore action initiates the async restore workflow (leader only).
     task = juju.run(f"{APP_NAME}/leader", "restore", {"backup-id": backup_id})
@@ -181,7 +157,7 @@ def test_restore_rollback(
 
     # Verify every unit has the pre-backup value.
     for unit_name in juju.status().apps[APP_NAME].units:
-        got = _read_key(juju, unit_name, "restore_test_key")
+        got = read_key(juju, unit_name, "restore_test_key")
         assert got == "original", f"Expected 'original' on {unit_name}, got {got!r}"
 
 
@@ -198,7 +174,7 @@ def test_restore_disaster_recovery(
     # not already leave them in place (deploy_and_relate_s3 is idempotent).
     deploy_and_relate_s3(juju, charm, substrate, microceph)
 
-    _write_key(juju, "dr_key", "dr-value")
+    write_key(juju, "dr_key", "dr-value")
 
     task = juju.run(f"{APP_NAME}/leader", "create-backup")
     assert task.success, task.stderr
@@ -220,7 +196,7 @@ def test_restore_disaster_recovery(
 
     _wait_restore_active(juju)
 
-    got = _read_key(juju, _leader_unit_name(juju), "dr_key")
+    got = read_key(juju, _leader_unit_name(juju), "dr_key")
     assert got == "dr-value", f"Expected 'dr-value' after DR restore, got {got!r}"
 
 
@@ -242,7 +218,7 @@ def test_corrupt_restore_keeps_cluster_and_failover(
     # Independently runnable (deploy_and_relate_s3 is idempotent).
     deploy_and_relate_s3(juju, charm, substrate, microceph)
 
-    _write_key(juju, "safe_key", "safe-value")
+    write_key(juju, "safe_key", "safe-value")
 
     corrupt_id = upload_corrupt_backup(juju, s3_bucket, microceph)
 
@@ -270,7 +246,7 @@ def test_corrupt_restore_keeps_cluster_and_failover(
     )
 
     # Old data must still be present (restore rolled back or never committed).
-    got = _read_key(juju, _leader_unit_name(juju), "safe_key")
+    got = read_key(juju, _leader_unit_name(juju), "safe_key")
     assert got == "safe-value", f"Old data lost after corrupt restore; got {got!r}"
 
     # _fail_restore must have resumed failover: every sentinel's
@@ -346,7 +322,7 @@ def test_failed_restore_not_wedged_when_leader_not_primary(
     # Independently runnable (deploy_and_relate_s3 is idempotent).
     deploy_and_relate_s3(juju, charm, substrate, microceph)
 
-    _write_key(juju, "wedge_key", "wedge-value")
+    write_key(juju, "wedge_key", "wedge-value")
 
     leader, primary = _force_primary_off_leader(juju, substrate)
     logger.info("Arranged leader=%s primary=%s for the failed-restore test", leader, primary)
@@ -374,7 +350,7 @@ def test_failed_restore_not_wedged_when_leader_not_primary(
     )
 
     # Old data survived the failed restore.
-    got = _read_key(juju, leader, "wedge_key")
+    got = read_key(juju, leader, "wedge_key")
     assert got == "wedge-value", f"Old data lost after failed restore; got {got!r}"
 
     # Not wedged: restore_id was cleared, so create-backup is no longer blocked by
@@ -412,14 +388,14 @@ def test_restore_single_unit(
     deploy_and_relate_s3(juju, charm, substrate, microceph, num_units=1)
     assert len(juju.status().apps[APP_NAME].units) == 1
 
-    _write_key(juju, "single_unit_key", "original")
+    write_key(juju, "single_unit_key", "original")
 
     task = juju.run(f"{APP_NAME}/leader", "create-backup")
     assert task.success, task.stderr
     backup_id = task.results["backup-id"]
     assert BACKUP_ID_RE.match(backup_id), f"Unexpected backup-id format: {backup_id!r}"
 
-    _write_key(juju, "single_unit_key", "mutated")
+    write_key(juju, "single_unit_key", "mutated")
 
     task = juju.run(f"{APP_NAME}/leader", "restore", {"backup-id": backup_id})
     assert task.success, task.stderr
@@ -428,10 +404,10 @@ def test_restore_single_unit(
     _wait_restore_active(juju)
 
     unit_name = _leader_unit_name(juju)
-    got = _read_key(juju, unit_name, "single_unit_key")
+    got = read_key(juju, unit_name, "single_unit_key")
     assert got == "original", f"Expected 'original' on {unit_name}, got {got!r}"
 
     # Writable after the restore restart (min-replicas-to-write relaxed for a lone primary).
-    _write_key(juju, "single_unit_post_restore", "ok")
-    got = _read_key(juju, unit_name, "single_unit_post_restore")
+    write_key(juju, "single_unit_post_restore", "ok")
+    got = read_key(juju, unit_name, "single_unit_post_restore")
     assert got == "ok", f"Single unit not writable after restore; got {got!r}"
