@@ -4,27 +4,42 @@
 
 """Unit tests for the storage backends behind BackupManager.
 
-The only place boto3 is faked: everything above the StorageBackend Protocol is
-tested against a fake backend in test_backup.py / test_restore.py. Exceptions are
-imported flat (`common.exceptions`) because src/ imports are flat, so the class
-the backend raises is the flat one, not the `src.`-prefixed copy.
+The only place the SDKs are faked: everything above the StorageBackend Protocol is
+tested against a fake backend in test_backup.py / test_restore.py. Charm modules
+are imported flat (`common.exceptions`), as src/ imports them, so the classes the
+backends raise and dispatch on are the same objects.
 """
 
 import io
+import json
+from types import SimpleNamespace
 
+import boto3
 import pytest
-from botocore.exceptions import ClientError
+import requests
+from azure.core.exceptions import HttpResponseError, ResourceExistsError, ServiceRequestError
+from azure.storage.blob import StorageErrorCode
+from botocore.exceptions import ClientError, EndpointConnectionError
+from google.api_core.exceptions import (
+    Conflict,
+    Forbidden,
+    NotFound,
+    RetryError,
+    ServiceUnavailable,
+)
+from google.auth.exceptions import RefreshError
+from google.cloud.storage.exceptions import DataCorruption, InvalidResponse
+from google.cloud.storage.fileio import BlobWriter
+
+from common import storage_backend
+from common.exceptions import StorageBackendError
+from common.storage_backend import AzureBackend, GCSBackend, S3Backend, build_backend
+from core.models import AzureStorageParameters, GCSParameters, S3Parameters
+from literals import GCS_INVALID_KEY_CODE
 
 
 def _s3_params(**overrides):
-    """Build a valid S3Parameters, overriding individual fields by name.
-
-    Flat import: src/ imports are flat, so `core.models.S3Parameters` is the class
-    production builds and isinstance-checks against -- the `src.`-prefixed copy is
-    a different class object and would miss every isinstance dispatch.
-    """
-    from core.models import S3Parameters
-
+    """Build a valid S3Parameters, overriding individual fields by name."""
     base = {
         "bucket": "b",
         "endpoint": "https://e",
@@ -38,8 +53,6 @@ def _s3_params(**overrides):
 
 def _backend(mocker, **overrides):
     """Build an S3Backend with its boto3 Bucket faked out; return (backend, bucket)."""
-    from src.common.storage_backend import S3Backend
-
     bucket = mocker.MagicMock()
     mocker.patch.object(S3Backend, "_bucket", return_value=bucket)
     return S3Backend(_s3_params(**overrides), mocker.MagicMock()), bucket
@@ -49,10 +62,6 @@ def _backend(mocker, **overrides):
 
 
 def test_s3backend_bucket_built_with_checksum_workaround(mocker, tmp_path):
-    import boto3
-
-    from src.common.storage_backend import S3Backend
-
     fake_session = mocker.MagicMock()
     fake_resource = mocker.MagicMock()
     fake_bucket = mocker.MagicMock()
@@ -79,10 +88,6 @@ def test_s3backend_bucket_built_with_checksum_workaround(mocker, tmp_path):
 
 
 def test_s3backend_bucket_uses_ca_chain_when_provided(mocker, tmp_path):
-    import boto3
-
-    from src.common.storage_backend import S3Backend
-
     mocker.patch("boto3.Session")
     ca_path = tmp_path / "s3_ca_chain.pem"
 
@@ -137,7 +142,6 @@ def test_s3backend_ensure_container_tolerates_existing_buckets(mocker):
 
 
 def test_s3backend_ensure_container_wraps_other_client_errors(mocker):
-    from common.exceptions import StorageBackendError
 
     backend, bucket = _backend(mocker, region="us-east-1")
     bucket.create.side_effect = ClientError(
@@ -164,7 +168,6 @@ def test_s3backend_list_object_ids_filters_by_prefix_and_strips_it(mocker):
 
 
 def test_s3backend_list_object_ids_wraps_client_error(mocker):
-    from common.exceptions import StorageBackendError
 
     backend, bucket = _backend(mocker)
     bucket.objects.filter.side_effect = ClientError(
@@ -189,7 +192,6 @@ def test_s3backend_head_ranges_over_the_first_bytes_only(mocker):
 
 
 def test_s3backend_head_wraps_client_error(mocker):
-    from common.exceptions import StorageBackendError
 
     backend, bucket = _backend(mocker)
     bucket.Object.return_value.get.side_effect = ClientError(
@@ -215,7 +217,6 @@ def test_s3backend_upload_streams_to_the_backup_id_key_in_parts(mocker):
 
 
 def test_s3backend_upload_wraps_client_error(mocker):
-    from common.exceptions import StorageBackendError
 
     backend, bucket = _backend(mocker)
     bucket.upload_fileobj.side_effect = ClientError(
@@ -248,7 +249,6 @@ def test_s3backend_download_tolerates_a_response_without_content_length(mocker):
 
 
 def test_s3backend_download_wraps_client_error(mocker):
-    from common.exceptions import StorageBackendError
 
     backend, bucket = _backend(mocker)
     bucket.Object.return_value.get.side_effect = ClientError(
@@ -284,16 +284,11 @@ def test_s3backend_delete_swallows_errors(mocker):
 
 def test_build_backend_selects_by_credentials_type(mocker):
     """The one place a credentials type maps to a backend; BackupManager never sees it."""
-    from common.storage_backend import S3Backend, build_backend
-
     assert isinstance(build_backend(_s3_params(), mocker.MagicMock()), S3Backend)
 
 
 def test_build_backend_rejects_unknown_credentials(mocker):
     """An unregistered credentials type fails loudly rather than silently doing nothing."""
-    from common.exceptions import StorageBackendError
-    from common.storage_backend import build_backend
-
     with pytest.raises(StorageBackendError):
         build_backend(object(), mocker.MagicMock())  # pyright: ignore[reportArgumentType]
 
@@ -302,13 +297,7 @@ def test_build_backend_rejects_unknown_credentials(mocker):
 
 
 def _az_params(**overrides):
-    """Build a valid AzureStorageParameters, overriding individual fields by name.
-
-    Flat import, for the same reason as `_s3_params`: `build_backend` dispatches
-    on isinstance, and the `src.`-prefixed copy is a different class object.
-    """
-    from core.models import AzureStorageParameters
-
+    """Build a valid AzureStorageParameters, overriding individual fields by name."""
     base = {
         "container": "c",
         "storage-account": "acct",
@@ -322,8 +311,6 @@ def _az_params(**overrides):
 
 def _az_backend(mocker, **overrides):
     """Build an AzureBackend with its ContainerClient faked; return (backend, container)."""
-    from src.common.storage_backend import AzureBackend
-
     container = mocker.MagicMock()
     mocker.patch.object(AzureBackend, "_container", return_value=container)
     return AzureBackend(_az_params(**overrides)), container
@@ -335,8 +322,6 @@ def _http_error(code, message="boom"):
     ``process_storage_error`` attaches ``error_code`` as a ``StorageErrorCode``
     -- a (str, Enum) member -- which is what the backend has to translate.
     """
-    from azure.core.exceptions import HttpResponseError
-
     exc = HttpResponseError(message=message)
     exc.error_code = code
     return exc
@@ -392,7 +377,6 @@ def test_azurebackend_ensure_container_creates_it(mocker):
 
 
 def test_azurebackend_ensure_container_tolerates_an_existing_container(mocker):
-    from azure.core.exceptions import ResourceExistsError
 
     backend, container = _az_backend(mocker)
     container.create_container.side_effect = ResourceExistsError("exists")
@@ -401,7 +385,6 @@ def test_azurebackend_ensure_container_tolerates_an_existing_container(mocker):
 
 
 def test_azurebackend_ensure_container_wraps_other_http_errors(mocker):
-    from common.exceptions import StorageBackendError
 
     backend, container = _az_backend(mocker)
     container.create_container.side_effect = _http_error("AuthenticationFailed")
@@ -417,10 +400,6 @@ def test_azurebackend_safe_code_is_the_wire_code_not_the_enum_repr(mocker):
     Its str() renders "StorageErrorCode.AUTHENTICATION_FAILED"; the action result
     must carry the wire code the provider returned, matching the S3 side.
     """
-    from azure.storage.blob import StorageErrorCode
-
-    from common.exceptions import StorageBackendError
-
     backend, container = _az_backend(mocker)
     container.create_container.side_effect = _http_error(StorageErrorCode.AUTHENTICATION_FAILED)
 
@@ -431,10 +410,6 @@ def test_azurebackend_safe_code_is_the_wire_code_not_the_enum_repr(mocker):
 
 def test_azurebackend_safe_code_empty_when_the_sdk_attached_none(mocker):
     """A transport-level failure carries no provider code; the action falls back."""
-    from azure.core.exceptions import HttpResponseError
-
-    from common.exceptions import StorageBackendError
-
     backend, container = _az_backend(mocker)
     container.create_container.side_effect = HttpResponseError(message="connection reset")
 
@@ -460,8 +435,6 @@ def test_azurebackend_list_object_ids_filters_by_prefix_and_strips_it(mocker):
 
 
 def test_azurebackend_list_object_ids_wraps_http_errors(mocker):
-    from common.exceptions import StorageBackendError
-
     backend, container = _az_backend(mocker)
     container.list_blobs.side_effect = _http_error("ContainerNotFound")
 
@@ -484,8 +457,6 @@ def test_azurebackend_head_ranges_over_the_first_bytes_only(mocker):
 
 
 def test_azurebackend_head_wraps_http_errors(mocker):
-    from common.exceptions import StorageBackendError
-
     backend, container = _az_backend(mocker)
     container.get_blob_client.return_value.download_blob.side_effect = _http_error("BlobNotFound")
 
@@ -514,10 +485,6 @@ def test_azurebackend_upload_streams_to_the_backup_id_blob(mocker):
 
 def test_azurebackend_upload_refuses_to_replace_an_existing_blob(mocker):
     """The store itself rejects the write, and its code reaches the action result."""
-    from azure.core.exceptions import ResourceExistsError
-
-    from common.exceptions import StorageBackendError
-
     backend, container = _az_backend(mocker)
     exists = ResourceExistsError(message="already there")
     exists.error_code = "BlobAlreadyExists"
@@ -529,8 +496,6 @@ def test_azurebackend_upload_refuses_to_replace_an_existing_blob(mocker):
 
 
 def test_azurebackend_upload_wraps_http_errors(mocker):
-    from common.exceptions import StorageBackendError
-
     backend, container = _az_backend(mocker)
     container.get_blob_client.return_value.upload_blob.side_effect = _http_error(
         "AccountIsDisabled"
@@ -555,7 +520,6 @@ def test_azurebackend_download_returns_the_downloader_and_its_length(mocker):
 
 
 def test_azurebackend_download_wraps_http_errors(mocker):
-    from common.exceptions import StorageBackendError
 
     backend, container = _az_backend(mocker)
     container.get_blob_client.return_value.download_blob.side_effect = _http_error("BlobNotFound")
@@ -583,7 +547,6 @@ def test_azurebackend_delete_swallows_errors(mocker):
 
 
 def test_build_backend_selects_the_azure_backend(mocker):
-    from common.storage_backend import AzureBackend, build_backend
 
     assert isinstance(build_backend(_az_params(), mocker.MagicMock()), AzureBackend)
 
@@ -610,10 +573,6 @@ def test_azurebackend_wraps_transport_errors(mocker):
     latter lets a raw SDK exception past the Protocol's contract -- and past
     ``create_backup``'s handler, orphaning the ``valkey-cli --rdb`` producer.
     """
-    from azure.core.exceptions import ServiceRequestError
-
-    from common.exceptions import StorageBackendError
-
     for name in _transport_calls(_az_backend(mocker)[0]):
         backend, container = _az_backend(mocker)
         container.create_container.side_effect = ServiceRequestError("unreachable")
@@ -630,10 +589,6 @@ def test_azurebackend_wraps_transport_errors(mocker):
 
 def test_s3backend_wraps_transport_errors(mocker):
     """The same gap on the S3 side: BotoCoreError is disjoint from ClientError."""
-    from botocore.exceptions import EndpointConnectionError
-
-    from common.exceptions import StorageBackendError
-
     for name in _transport_calls(_backend(mocker)[0]):
         backend, bucket = _backend(mocker)
         err = EndpointConnectionError(endpoint_url="https://e")
@@ -656,9 +611,6 @@ def test_azurebackend_container_client_is_built_directly(mocker):
     ``ContainerClient`` takes the account URL and container name itself, so the
     ``BlobServiceClient`` hop buys nothing.
     """
-    from src.common import storage_backend
-    from src.common.storage_backend import AzureBackend
-
     container_cls = mocker.patch.object(storage_backend, "ContainerClient")
     assert not hasattr(storage_backend, "BlobServiceClient")
 
@@ -679,9 +631,6 @@ def test_azurebackend_container_client_works_for_a_path_style_endpoint(mocker):
     shared key credential" for any endpoint whose host is not
     ``<account>.blob.*``, so the account name is always passed explicitly.
     """
-    from src.common import storage_backend
-    from src.common.storage_backend import AzureBackend
-
     container_cls = mocker.patch.object(storage_backend, "ContainerClient")
 
     AzureBackend(
@@ -704,8 +653,6 @@ def _gcs_key(**overrides) -> str:
 
     The PEM body is a stub that the mocked SDK never parses.
     """
-    import json
-
     info = {
         "type": "service_account",
         "project_id": "proj",
@@ -718,13 +665,7 @@ def _gcs_key(**overrides) -> str:
 
 
 def _gcs_params(**overrides):
-    """Build a valid GCSParameters, overriding individual fields by name.
-
-    Flat import, for the same reason as `_s3_params`: `build_backend` dispatches
-    on isinstance, and the `src.`-prefixed copy is a different class object.
-    """
-    from core.models import GCSParameters
-
+    """Build a valid GCSParameters, overriding individual fields by name."""
     base = {"bucket": "b", "path": "valkey", "secret-key": _gcs_key()}
     base.update(overrides)
     return GCSParameters.model_validate(base)
@@ -736,8 +677,6 @@ def _gcs_backend(mocker, **overrides):
     The blob's writer is a context manager that re-raises (``__exit__`` -> False),
     as the real one does.
     """
-    from src.common.storage_backend import GCSBackend
-
     client = mocker.MagicMock()
     bucket = mocker.MagicMock()
     client.bucket.return_value = bucket
@@ -755,9 +694,6 @@ def _invalid_response(status: int):
     That layer is what BlobWriter drives directly, unwrapped by the SDK's
     `_raise_from_invalid_response`, so the backend has to translate it.
     """
-    import requests
-    from google.cloud.storage.exceptions import InvalidResponse
-
     response = requests.Response()
     response.status_code = status
     return InvalidResponse(
@@ -773,9 +709,6 @@ GCS_CHUNK = 8 * 1024 * 1024
 
 def test_gcsbackend_client_is_built_from_the_service_account_key(mocker):
     """No env vars, no ADC: the key from the relation, and its project, explicitly."""
-    from src.common import storage_backend
-    from src.common.storage_backend import GCSBackend
-
     from_info = mocker.patch.object(storage_backend.storage.Client, "from_service_account_info")
 
     client = GCSBackend(_gcs_params())._client()
@@ -787,9 +720,6 @@ def test_gcsbackend_client_is_built_from_the_service_account_key(mocker):
 
 
 def test_gcsbackend_client_passes_project_none_when_the_key_has_none(mocker):
-    from src.common import storage_backend
-    from src.common.storage_backend import GCSBackend
-
     from_info = mocker.patch.object(storage_backend.storage.Client, "from_service_account_info")
 
     GCSBackend(_gcs_params(**{"secret-key": _gcs_key(project_id=None)}))._client()
@@ -804,11 +734,6 @@ def test_gcsbackend_client_translates_an_unparsable_private_key(mocker):
     That happens at client construction; it is the only ValueError the backend
     translates.
     """
-    from common.exceptions import StorageBackendError
-    from literals import GCS_INVALID_KEY_CODE
-    from src.common import storage_backend
-    from src.common.storage_backend import GCSBackend
-
     mocker.patch.object(
         storage_backend.storage.Client,
         "from_service_account_info",
@@ -842,8 +767,6 @@ def test_gcsbackend_ensure_container_creates_a_missing_bucket(mocker):
 
 
 def test_gcsbackend_ensure_container_tolerates_an_existing_bucket(mocker):
-    from google.api_core.exceptions import Conflict
-
     backend, client = _gcs_backend(mocker)
     client.create_bucket.side_effect = Conflict("exists")
     client.list_blobs.return_value = iter([])
@@ -855,8 +778,6 @@ def test_gcsbackend_ensure_container_tolerates_an_existing_bucket(mocker):
 
 def test_gcsbackend_ensure_container_probes_the_prefix_when_create_is_forbidden(mocker):
     """A key without bucket permissions gets 403 from create even when the bucket exists."""
-    from google.api_core.exceptions import Forbidden
-
     backend, client = _gcs_backend(mocker)
     client.create_bucket.side_effect = Forbidden("no buckets.create")
     client.list_blobs.return_value = iter([])
@@ -867,10 +788,6 @@ def test_gcsbackend_ensure_container_probes_the_prefix_when_create_is_forbidden(
 
 
 def test_gcsbackend_ensure_container_surfaces_a_failed_probe(mocker):
-    from google.api_core.exceptions import Forbidden, NotFound
-
-    from common.exceptions import StorageBackendError
-
     for probe_error, code in [
         (Forbidden("403 GET https://storage.googleapis.com/b"), "Forbidden"),
         (NotFound("404 GET https://storage.googleapis.com/b"), "NotFound"),
@@ -886,10 +803,6 @@ def test_gcsbackend_ensure_container_surfaces_a_failed_probe(mocker):
 
 
 def test_gcsbackend_ensure_container_wraps_other_errors(mocker):
-    from google.api_core.exceptions import ServiceUnavailable
-
-    from common.exceptions import StorageBackendError
-
     backend, client = _gcs_backend(mocker)
     client.create_bucket.side_effect = ServiceUnavailable(
         "503 POST https://storage.googleapis.com/b"
@@ -905,8 +818,6 @@ def test_gcsbackend_ensure_container_wraps_other_errors(mocker):
 
 
 def test_gcsbackend_list_object_ids_filters_by_prefix_and_strips_it(mocker):
-    from types import SimpleNamespace
-
     backend, client = _gcs_backend(mocker)
     client.list_blobs.return_value = [
         SimpleNamespace(name="valkey/2026-05-13T10:00:00Z"),
@@ -920,10 +831,6 @@ def test_gcsbackend_list_object_ids_filters_by_prefix_and_strips_it(mocker):
 
 
 def test_gcsbackend_list_object_ids_wraps_errors(mocker):
-    from google.api_core.exceptions import Forbidden
-
-    from common.exceptions import StorageBackendError
-
     backend, client = _gcs_backend(mocker)
     client.list_blobs.side_effect = Forbidden("denied")
 
@@ -944,10 +851,6 @@ def test_gcsbackend_head_ranges_over_the_first_bytes_only(mocker):
 
 
 def test_gcsbackend_head_wraps_errors(mocker):
-    from google.api_core.exceptions import NotFound
-
-    from common.exceptions import StorageBackendError
-
     backend, client = _gcs_backend(mocker)
     client.bucket.return_value.blob.return_value.download_as_bytes.side_effect = NotFound("x")
 
@@ -989,10 +892,6 @@ def test_gcsbackend_upload_refuses_to_replace_an_existing_object(mocker):
     PreconditionFailed. The block exits on the exception, which is what
     cancels the session.
     """
-    from google.cloud.storage.exceptions import InvalidResponse
-
-    from common.exceptions import StorageBackendError
-
     backend, client = _gcs_backend(mocker)
     writer = client.bucket.return_value.blob.return_value.open.return_value
     writer.write.side_effect = _invalid_response(412)
@@ -1021,8 +920,6 @@ def test_gcsbackend_upload_lets_a_reader_failure_propagate_through_the_block(moc
 
 def _real_blob_writer(mocker, chunk_size):
     """Build the SDK's own BlobWriter over a fake blob; return (writer, upload, transport)."""
-    from google.cloud.storage.fileio import BlobWriter
-
     blob = mocker.MagicMock()
     upload, transport = mocker.MagicMock(), mocker.MagicMock()
     blob._initiate_resumable_upload.return_value = (upload, transport)
@@ -1078,8 +975,6 @@ def test_gcsbackend_upload_terminates_a_writer_that_failed_in_close(mocker):
     commit after the action reported failure. upload() terminates the writer
     itself in that case (real BlobWriter, fake blob).
     """
-    from common.exceptions import StorageBackendError
-
     chunk = 256 * 1024
     backend, client = _gcs_backend(mocker)
     backend._CHUNK = chunk
@@ -1104,10 +999,6 @@ def test_gcsbackend_upload_keeps_the_original_error_when_terminate_fails(mocker)
     The DELETE can fail for the same reason the upload did; the action must
     still report the upload's code, not the cancel's.
     """
-    import requests
-
-    from common.exceptions import StorageBackendError
-
     chunk = 256 * 1024
     backend, client = _gcs_backend(mocker)
     backend._CHUNK = chunk
@@ -1143,8 +1034,6 @@ def test_gcsbackend_download_returns_the_reader_and_its_length(mocker):
 
 
 def test_gcsbackend_download_reports_a_missing_object_as_not_found(mocker):
-    from common.exceptions import StorageBackendError
-
     backend, client = _gcs_backend(mocker)
     client.bucket.return_value.get_blob.return_value = None
 
@@ -1154,10 +1043,6 @@ def test_gcsbackend_download_reports_a_missing_object_as_not_found(mocker):
 
 
 def test_gcsbackend_download_wraps_errors(mocker):
-    from google.api_core.exceptions import Forbidden
-
-    from common.exceptions import StorageBackendError
-
     backend, client = _gcs_backend(mocker)
     client.bucket.return_value.get_blob.side_effect = Forbidden("denied")
 
@@ -1176,8 +1061,6 @@ def test_gcsbackend_delete_removes_the_backup_id_object(mocker):
 
 
 def test_gcsbackend_delete_swallows_errors(mocker):
-    from google.api_core.exceptions import NotFound
-
     backend, client = _gcs_backend(mocker)
     client.bucket.return_value.blob.return_value.delete.side_effect = NotFound("gone")
 
@@ -1188,17 +1071,11 @@ def test_gcsbackend_delete_swallows_errors(mocker):
 
 
 def test_build_backend_selects_the_gcs_backend(mocker):
-    from common.storage_backend import GCSBackend, build_backend
-
     assert isinstance(build_backend(_gcs_params(), mocker.MagicMock()), GCSBackend)
 
 
 def test_gcsbackend_safe_code_is_the_class_name_never_the_message(mocker):
     """str(exc) is "<status> <verb> <url>: <message>" -- never for an action result."""
-    from google.api_core.exceptions import Forbidden
-
-    from src.common.storage_backend import GCSBackend
-
     exc = Forbidden("403 GET https://storage.googleapis.com/storage/v1/b/secret-bucket")
     assert GCSBackend._error_code(exc) == "Forbidden"
 
@@ -1209,11 +1086,6 @@ def test_gcsbackend_safe_code_normalises_retry_and_invalid_response(mocker):
     InvalidResponse carries only an HTTP status. Both are mapped to the
     status's api_core class.
     """
-    from google.api_core.exceptions import RetryError, ServiceUnavailable
-    from google.cloud.storage.exceptions import DataCorruption
-
-    from src.common.storage_backend import GCSBackend
-
     assert GCSBackend._error_code(RetryError("deadline", ServiceUnavailable("503"))) == (
         "ServiceUnavailable"
     )
@@ -1224,8 +1096,6 @@ def test_gcsbackend_safe_code_normalises_retry_and_invalid_response(mocker):
     )
     corrupt = DataCorruption(_invalid_response(200).response, "checksum mismatch")
     assert GCSBackend._error_code(corrupt) == "DataCorruption"
-
-    from google.cloud.storage.exceptions import InvalidResponse
 
     # A response object without an int status_code: no mapping, class name wins.
     assert GCSBackend._error_code(InvalidResponse(object(), "no status")) == "InvalidResponse"
@@ -1238,13 +1108,6 @@ def test_gcsbackend_wraps_every_sdk_root(mocker):
     with a structured code, or a raw exception escapes create_backup's
     handlers.
     """
-    import requests
-    from google.api_core.exceptions import RetryError, ServiceUnavailable
-    from google.auth.exceptions import RefreshError
-    from google.cloud.storage.exceptions import DataCorruption
-
-    from common.exceptions import StorageBackendError
-
     cases = [
         (requests.ConnectionError("unreachable"), "ConnectionError"),
         (RefreshError("invalid_grant: Invalid JWT Signature."), "RefreshError"),
