@@ -178,6 +178,11 @@ def test_relation_with_data_integrator(juju: jubilant.Juju) -> None:
 
     logger.info("Integrating Valkey with Data Integrator")
     juju.integrate(f"{APP_NAME}:valkey-client", f"{DATA_INTEGRATOR_NAME}:valkey")
+    # wait for client relation to settle before activating LDAP
+    juju.wait(
+        lambda status: are_agents_idle(status, APP_NAME, idle_period=30, unit_count=NUM_UNITS),
+        timeout=600,
+    )
     juju.wait(
         lambda status: does_status_match(
             status,
