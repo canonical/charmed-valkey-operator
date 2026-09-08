@@ -128,8 +128,7 @@ class TLSEvents(ops.Object):
             except ValkeyWorkloadCommandError as e:
                 logger.error("Workload error during CA rotation: %s", e)
                 event.defer()
-            finally:
-                return
+            return
 
         if (
             not self.charm.tls_manager.will_certificate_expire()
@@ -217,8 +216,7 @@ class TLSEvents(ops.Object):
             except (ValkeyTLSLoadError, ValkeyWorkloadCommandError):
                 logger.error("Failed to reload TLS certificates")
                 event.defer()
-            finally:
-                return
+            return
 
         primary_ip = ""
         if self.charm.state.unit_server.is_started:

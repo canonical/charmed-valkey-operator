@@ -31,3 +31,8 @@ file so that Claude Code and Gemini CLI pick it up too.)
   (npm on the `node` snap) serves Azure; both are declared under `host.snaps` in
   `concierge-{k8s,vm}.yaml` and self-installed by the fixture as a local fallback, so one code
   path covers both substrates.
+- The GCS backup module (`tests/integration/backup/test_gcs_backup.py`) runs against real
+  GCS (`gcs-integrator` has no endpoint option). Export `GCS_SERVICE_ACCOUNT` (the
+  service-account key, JSON or base64 JSON) and optionally `GCS_BUCKET` (default
+  `data-charms-testing`); a missing or empty key fails the module rather than skipping it.
+  In CI the secret must be base64: spread's host env export cannot carry raw JSON.

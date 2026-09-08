@@ -43,8 +43,7 @@ suggestions, fixes and constructive feedback.
 - [Juju](https://juju.is/)
 - [Charmhub](https://charmhub.io/)
 - [Valkey](https://valkey.io/)
-- [Valkey snap](https://github.com/canonical/charmed-valkey-snap)
-- [Valkey rock](https://github.com/canonical/charmed-valkey-rock)
+- [Valkey artifacts](https://github.com/canonical/valkey-artifacts)
 - [Canonical Data solutions](https://canonical.com/data)
 - [Report issues](https://github.com/canonical/valkey-operator/issues)
 - {doc}`Contact us <reference/contact>`
