@@ -5,7 +5,6 @@
 from unittest.mock import PropertyMock
 
 import pytest
-from ops import testing
 
 
 @pytest.fixture(autouse=True)
@@ -43,32 +42,17 @@ def tenacity_wait(mocker):
 
 
 @pytest.fixture(autouse=True)
-def cloud_spec():
-    return testing.CloudSpec(
-        type="kubernetes",
-        endpoint="https://127.0.0.1:8443",
-        credential=testing.CloudCredential(
-            auth_type="clientcertificate",
-            attributes={
-                "client-cert": "foo",
-                "client-key": "bar",
-                "server-cert": "baz",
-            },
-        ),
-    )
+def mock_cloud_spec(mocker):
+    mocker.patch("ops.model.Model.get_cloud_spec")
 
 
 @pytest.fixture(autouse=True)
-def cloud_spec_vm():
-    return testing.CloudSpec(
-        type="lxd",
-        endpoint="https://127.0.0.1:8443",
-        credential=testing.CloudCredential(
-            auth_type="clientcertificate",
-            attributes={
-                "client-cert": "foo",
-                "client-key": "bar",
-                "server-cert": "baz",
-            },
-        ),
-    )
+def k8s_environment(monkeypatch):
+    """Simulate a Kubernetes container environment by default."""
+    monkeypatch.setenv("KUBERNETES_SERVICE_HOST", "127.0.0.1")
+
+
+@pytest.fixture
+def vm_environment(monkeypatch):
+    """Simulate a VM environment without Kubernetes environment variables."""
+    monkeypatch.delenv("KUBERNETES_SERVICE_HOST", raising=False)

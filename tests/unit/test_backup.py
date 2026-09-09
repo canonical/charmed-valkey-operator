@@ -109,7 +109,7 @@ def test_valkey_server_is_backup_in_progress_reflects_model_field():
     assert server.is_backup_in_progress is False
 
 
-def test_cluster_state_exposes_s3_relation(cloud_spec):
+def test_cluster_state_exposes_s3_relation():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer = testing.PeerRelation(id=1, endpoint=PEER_RELATION)
     status_peer = testing.PeerRelation(id=2, endpoint=STATUS_PEERS_RELATION)
@@ -120,7 +120,7 @@ def test_cluster_state_exposes_s3_relation(cloud_spec):
         remote_app_name="s3-integrator",
     )
     state_in = testing.State(
-        model=testing.Model(name="m", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="m", type="lxd"),
         leader=True,
         relations={peer, status_peer, s3_rel},
         containers={testing.Container(name="valkey", can_connect=True)},
@@ -131,7 +131,7 @@ def test_cluster_state_exposes_s3_relation(cloud_spec):
         assert manager.charm.state.s3_relation.name == S3_RELATION_NAME
 
 
-def test_active_backup_credentials_follows_the_relation(cloud_spec, mocker):
+def test_active_backup_credentials_follows_the_relation(mocker):
     """Credentials are only "active" while the backend they belong to is related.
 
     The leader clears the stored envelope on relation-broken; until it does, the
@@ -156,7 +156,7 @@ def test_active_backup_credentials_follows_the_relation(cloud_spec, mocker):
         remote_app_name="s3-integrator",
     )
     common = {
-        "model": testing.Model(name="m", type="lxd", cloud_spec=cloud_spec),
+        "model": testing.Model(name="m", type="lxd"),
         "leader": True,
         "containers": {testing.Container(name="valkey", can_connect=True)},
     }
@@ -182,7 +182,7 @@ def test_backup_credential_registry_maps_relations_to_databag_fields():
         assert field in PeerAppModel.model_fields
 
 
-def test_backup_relations_and_conflict_follow_the_registry(cloud_spec):
+def test_backup_relations_and_conflict_follow_the_registry():
     """Relation discovery and the conflict check are driven by the registry alone.
 
     Exercised with the three registered backends, so it also pins the mutual
@@ -195,7 +195,7 @@ def test_backup_relations_and_conflict_follow_the_registry(cloud_spec):
     azure_rel = testing.Relation(id=4, endpoint=AZURE_RELATION_NAME, interface="azure_storage")
     gcs_rel = testing.Relation(id=5, endpoint=GCS_RELATION_NAME, interface="gcs")
     common = {
-        "model": testing.Model(name="m", type="lxd", cloud_spec=cloud_spec),
+        "model": testing.Model(name="m", type="lxd"),
         "leader": True,
         "containers": {testing.Container(name="valkey", can_connect=True)},
     }
@@ -605,7 +605,7 @@ def test_safe_error_generic_for_non_client_errors():
     assert "debug-log" in msg
 
 
-def test_storage_detaching_refuses_during_backup(cloud_spec):
+def test_storage_detaching_refuses_during_backup():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer = testing.PeerRelation(
         id=1,
@@ -615,7 +615,7 @@ def test_storage_detaching_refuses_during_backup(cloud_spec):
     status_peer = testing.PeerRelation(id=2, endpoint=STATUS_PEERS_RELATION)
     storage = testing.Storage(name=DATA_STORAGE)
     state_in = testing.State(
-        model=testing.Model(name="m", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="m", type="lxd"),
         leader=True,
         relations={peer, status_peer},
         storages={storage},
@@ -629,12 +629,12 @@ def test_storage_detaching_refuses_during_backup(cloud_spec):
     assert "ValkeyBackupInProgressError" in str(exc_info.value)
 
 
-def test_charm_constructs_backup_manager_and_events(cloud_spec):
+def test_charm_constructs_backup_manager_and_events():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer = testing.PeerRelation(id=1, endpoint=PEER_RELATION)
     status_peer = testing.PeerRelation(id=2, endpoint=STATUS_PEERS_RELATION)
     state_in = testing.State(
-        model=testing.Model(name="m", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="m", type="lxd"),
         leader=True,
         relations={peer, status_peer},
         containers={testing.Container(name="valkey", can_connect=True)},
@@ -831,7 +831,7 @@ def test_cluster_azure_credentials_parses_envelope_and_defaults_none(mocker):
     assert cluster.azure_credentials is None
 
 
-def test_credentials_changed_handlers_cover_every_registered_backend(mocker, cloud_spec):
+def test_credentials_changed_handlers_cover_every_registered_backend(mocker):
     """Every registry entry has a changed handler, or its integrator is inert.
 
     ``_reconcile_other_backends`` and the leader_elected recovery observers are
@@ -839,7 +839,7 @@ def test_credentials_changed_handlers_cover_every_registered_backend(mocker, clo
     """
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     state_in = testing.State(
-        model=testing.Model(name="m", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="m", type="lxd"),
         leader=True,
         relations={
             testing.PeerRelation(id=1, endpoint=PEER_RELATION),
@@ -1108,7 +1108,7 @@ def test_metadata_declares_gcs_relation():
     assert gcs["optional"] is True
 
 
-def test_gcs_credentials_flow_through_the_real_requirer(mocker, cloud_spec):
+def test_gcs_credentials_flow_through_the_real_requirer(mocker):
     """Contract test through object-storage-charmlib, not a hand-shaped payload.
 
     The lib json.loads every published field, so the key reaches the charm as a
@@ -1133,7 +1133,7 @@ def test_gcs_credentials_flow_through_the_real_requirer(mocker, cloud_spec):
     )
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     state_in = testing.State(
-        model=testing.Model(name="m", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="m", type="lxd"),
         leader=True,
         relations={
             testing.PeerRelation(id=1, endpoint=PEER_RELATION),
@@ -1178,9 +1178,7 @@ def test_gcs_credentials_flow_through_the_real_requirer(mocker, cloud_spec):
 BACKUP_ID = "2026-05-13T10:00:00Z"
 
 
-def _backup_context_and_state(
-    cloud_spec, *, leader=True, relations=(), secrets=(), unit_data=None, peer=True
-):
+def _backup_context_and_state(*, leader=True, relations=(), secrets=(), unit_data=None, peer=True):
     """Build a Context + State with the peer relations and the given storage relations."""
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peers = {testing.PeerRelation(id=2, endpoint=STATUS_PEERS_RELATION)}
@@ -1193,7 +1191,7 @@ def _backup_context_and_state(
             )
         )
     state = testing.State(
-        model=testing.Model(name="m", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="m", type="lxd"),
         leader=leader,
         relations={*peers, *relations},
         secrets=set(secrets),
@@ -1286,9 +1284,9 @@ def backup_managers(mocker):
 # ── credentials changed ──────────────────────────────────────────────────────
 
 
-def test_s3_credentials_changed_leader_stores_the_normalised_envelope(cloud_spec, backup_managers):
+def test_s3_credentials_changed_leader_stores_the_normalised_envelope(backup_managers):
     s3_rel, secret = _s3_relation(bucket=" b ", endpoint="https://e/", path="/p/")
-    ctx, state = _backup_context_and_state(cloud_spec, relations=[s3_rel], secrets=[secret])
+    ctx, state = _backup_context_and_state(relations=[s3_rel], secrets=[secret])
 
     state_out = _run_relation_changed(ctx, state, s3_rel)
 
@@ -1300,12 +1298,10 @@ def test_s3_credentials_changed_leader_stores_the_normalised_envelope(cloud_spec
     assert stored["access-key"] == "AK"
 
 
-def test_s3_credentials_changed_stores_the_ca_on_every_unit(cloud_spec, backup_managers):
+def test_s3_credentials_changed_stores_the_ca_on_every_unit(backup_managers):
     """The endpoint CA is needed on disk by every unit; only the leader stores credentials."""
     s3_rel, secret = _s3_relation(**{"tls-ca-chain": json.dumps(["-----CERT-----"])})
-    ctx, state = _backup_context_and_state(
-        cloud_spec, leader=False, relations=[s3_rel], secrets=[secret]
-    )
+    ctx, state = _backup_context_and_state(leader=False, relations=[s3_rel], secrets=[secret])
 
     state_out = _run_relation_changed(ctx, state, s3_rel)
 
@@ -1316,9 +1312,9 @@ def test_s3_credentials_changed_stores_the_ca_on_every_unit(cloud_spec, backup_m
     assert _stored_credentials(state_out, "s3-credentials") is None
 
 
-def test_s3_credentials_changed_rejects_a_path_that_strips_to_empty(cloud_spec, backup_managers):
+def test_s3_credentials_changed_rejects_a_path_that_strips_to_empty(backup_managers):
     s3_rel, secret = _s3_relation(path="/")
-    ctx, state = _backup_context_and_state(cloud_spec, relations=[s3_rel], secrets=[secret])
+    ctx, state = _backup_context_and_state(relations=[s3_rel], secrets=[secret])
 
     state_out = _run_relation_changed(ctx, state, s3_rel)
 
@@ -1326,9 +1322,9 @@ def test_s3_credentials_changed_rejects_a_path_that_strips_to_empty(cloud_spec, 
     assert _stored_credentials(state_out, "s3-credentials") is None
 
 
-def test_s3_credentials_changed_rejects_an_incomplete_payload(cloud_spec, backup_managers):
+def test_s3_credentials_changed_rejects_an_incomplete_payload(backup_managers):
     s3_rel, secret = _s3_relation(endpoint=None)
-    ctx, state = _backup_context_and_state(cloud_spec, relations=[s3_rel], secrets=[secret])
+    ctx, state = _backup_context_and_state(relations=[s3_rel], secrets=[secret])
 
     state_out = _run_relation_changed(ctx, state, s3_rel)
 
@@ -1336,10 +1332,10 @@ def test_s3_credentials_changed_rejects_an_incomplete_payload(cloud_spec, backup
     assert _stored_credentials(state_out, "s3-credentials") is None
 
 
-def test_s3_credentials_changed_skips_an_unchanged_envelope(cloud_spec, backup_managers):
+def test_s3_credentials_changed_skips_an_unchanged_envelope(backup_managers):
     """leader_elected re-fires the handler; an unchanged envelope must not hit the store again."""
     s3_rel, secret = _s3_relation()
-    ctx, state = _backup_context_and_state(cloud_spec, relations=[s3_rel], secrets=[secret])
+    ctx, state = _backup_context_and_state(relations=[s3_rel], secrets=[secret])
 
     state = _run_relation_changed(ctx, state, s3_rel)
     _run_relation_changed(ctx, state, s3_rel)
@@ -1347,11 +1343,9 @@ def test_s3_credentials_changed_skips_an_unchanged_envelope(cloud_spec, backup_m
     backup_managers.ensure_container.assert_called_once()
 
 
-def test_s3_credentials_changed_defers_without_the_peer_relation(cloud_spec, backup_managers):
+def test_s3_credentials_changed_defers_without_the_peer_relation(backup_managers):
     s3_rel, secret = _s3_relation()
-    ctx, state = _backup_context_and_state(
-        cloud_spec, relations=[s3_rel], secrets=[secret], peer=False
-    )
+    ctx, state = _backup_context_and_state(relations=[s3_rel], secrets=[secret], peer=False)
 
     state_out = _run_relation_changed(ctx, state, s3_rel)
 
@@ -1359,12 +1353,12 @@ def test_s3_credentials_changed_defers_without_the_peer_relation(cloud_spec, bac
     backup_managers.ensure_container.assert_not_called()
 
 
-def test_credentials_are_not_stored_while_backends_conflict(cloud_spec, backup_managers):
+def test_credentials_are_not_stored_while_backends_conflict(backup_managers):
     """With two integrators related there is no answer to "which backend"; store nothing."""
     s3_rel, s3_secret = _s3_relation()
     azure_rel, azure_secret = _azure_relation()
     ctx, state = _backup_context_and_state(
-        cloud_spec, relations=[s3_rel, azure_rel], secrets=[s3_secret, azure_secret]
+        relations=[s3_rel, azure_rel], secrets=[s3_secret, azure_secret]
     )
 
     state_out = _run_relation_changed(ctx, state, s3_rel)
@@ -1373,11 +1367,9 @@ def test_credentials_are_not_stored_while_backends_conflict(cloud_spec, backup_m
     assert _stored_credentials(state_out, "s3-credentials") is None
 
 
-def test_azure_credentials_changed_leader_stores_the_normalised_envelope(
-    cloud_spec, backup_managers
-):
+def test_azure_credentials_changed_leader_stores_the_normalised_envelope(backup_managers):
     azure_rel, secret = _azure_relation(container=" c ", path="/valkey/")
-    ctx, state = _backup_context_and_state(cloud_spec, relations=[azure_rel], secrets=[secret])
+    ctx, state = _backup_context_and_state(relations=[azure_rel], secrets=[secret])
 
     state_out = _run_relation_changed(ctx, state, azure_rel)
 
@@ -1388,11 +1380,9 @@ def test_azure_credentials_changed_leader_stores_the_normalised_envelope(
     assert stored["storage-account"] == "acct"
 
 
-def test_azure_credentials_changed_never_touches_the_s3_ca(cloud_spec, backup_managers):
+def test_azure_credentials_changed_never_touches_the_s3_ca(backup_managers):
     azure_rel, secret = _azure_relation()
-    ctx, state = _backup_context_and_state(
-        cloud_spec, leader=False, relations=[azure_rel], secrets=[secret]
-    )
+    ctx, state = _backup_context_and_state(leader=False, relations=[azure_rel], secrets=[secret])
 
     _run_relation_changed(ctx, state, azure_rel)
 
@@ -1400,14 +1390,12 @@ def test_azure_credentials_changed_never_touches_the_s3_ca(cloud_spec, backup_ma
     backup_managers.remove_tls_ca_chain.assert_not_called()
 
 
-def test_gcs_credentials_changed_leader_stores_the_normalised_envelope(
-    cloud_spec, backup_managers
-):
+def test_gcs_credentials_changed_leader_stores_the_normalised_envelope(backup_managers):
     """The key arrives as the dict the lib hands over and is stored as canonical JSON text."""
     gcs_rel, secret = _gcs_relation(
         bucket=" data-charms-testing ", path="/valkey/", **{"storage-class": "standard"}
     )
-    ctx, state = _backup_context_and_state(cloud_spec, relations=[gcs_rel], secrets=[secret])
+    ctx, state = _backup_context_and_state(relations=[gcs_rel], secrets=[secret])
 
     state_out = _run_relation_changed(ctx, state, gcs_rel)
 
@@ -1419,11 +1407,9 @@ def test_gcs_credentials_changed_leader_stores_the_normalised_envelope(
     assert json.loads(stored["secret-key"]) == json.loads(_gcs_service_account())
 
 
-def test_gcs_credentials_changed_never_touches_the_s3_ca(cloud_spec, backup_managers):
+def test_gcs_credentials_changed_never_touches_the_s3_ca(backup_managers):
     gcs_rel, secret = _gcs_relation()
-    ctx, state = _backup_context_and_state(
-        cloud_spec, leader=False, relations=[gcs_rel], secrets=[secret]
-    )
+    ctx, state = _backup_context_and_state(leader=False, relations=[gcs_rel], secrets=[secret])
 
     _run_relation_changed(ctx, state, gcs_rel)
 
@@ -1431,9 +1417,9 @@ def test_gcs_credentials_changed_never_touches_the_s3_ca(cloud_spec, backup_mana
     backup_managers.remove_tls_ca_chain.assert_not_called()
 
 
-def test_leader_elected_without_a_storage_relation_stores_nothing(cloud_spec, backup_managers):
+def test_leader_elected_without_a_storage_relation_stores_nothing(backup_managers):
     """Every backend's handler re-fires on leader_elected and must no-op without its relation."""
-    ctx, state = _backup_context_and_state(cloud_spec)
+    ctx, state = _backup_context_and_state()
 
     state_out = ctx.run(ctx.on.leader_elected(), state)
 
@@ -1445,9 +1431,9 @@ def test_leader_elected_without_a_storage_relation_stores_nothing(cloud_spec, ba
 # ── credentials gone ─────────────────────────────────────────────────────────
 
 
-def test_s3_credentials_gone_removes_the_ca_and_clears_the_envelope(cloud_spec, backup_managers):
+def test_s3_credentials_gone_removes_the_ca_and_clears_the_envelope(backup_managers):
     s3_rel, secret = _s3_relation()
-    ctx, state = _backup_context_and_state(cloud_spec, relations=[s3_rel], secrets=[secret])
+    ctx, state = _backup_context_and_state(relations=[s3_rel], secrets=[secret])
     state = _run_relation_changed(ctx, state, s3_rel)
     assert _stored_credentials(state, "s3-credentials") is not None
 
@@ -1457,9 +1443,9 @@ def test_s3_credentials_gone_removes_the_ca_and_clears_the_envelope(cloud_spec, 
     assert _stored_credentials(state_out, "s3-credentials") is None
 
 
-def test_s3_credentials_gone_on_a_non_leader_keeps_the_envelope(cloud_spec, backup_managers):
+def test_s3_credentials_gone_on_a_non_leader_keeps_the_envelope(backup_managers):
     s3_rel, secret = _s3_relation()
-    ctx, state = _backup_context_and_state(cloud_spec, relations=[s3_rel], secrets=[secret])
+    ctx, state = _backup_context_and_state(relations=[s3_rel], secrets=[secret])
     state = replace(_run_relation_changed(ctx, state, s3_rel), leader=False)
 
     state_out = _run_relation_broken(ctx, state, s3_rel)
@@ -1468,10 +1454,10 @@ def test_s3_credentials_gone_on_a_non_leader_keeps_the_envelope(cloud_spec, back
     assert _stored_credentials(state_out, "s3-credentials") is not None
 
 
-def test_s3_credentials_gone_defers_during_a_backup(cloud_spec, backup_managers):
+def test_s3_credentials_gone_defers_during_a_backup(backup_managers):
     s3_rel, secret = _s3_relation()
     ctx, state = _backup_context_and_state(
-        cloud_spec, relations=[s3_rel], secrets=[secret], unit_data={"backup-id": BACKUP_ID}
+        relations=[s3_rel], secrets=[secret], unit_data={"backup-id": BACKUP_ID}
     )
 
     state_out = _run_relation_broken(ctx, state, s3_rel)
@@ -1480,11 +1466,9 @@ def test_s3_credentials_gone_defers_during_a_backup(cloud_spec, backup_managers)
     backup_managers.remove_tls_ca_chain.assert_not_called()
 
 
-def test_azure_credentials_gone_clears_the_envelope_without_touching_the_ca(
-    cloud_spec, backup_managers
-):
+def test_azure_credentials_gone_clears_the_envelope_without_touching_the_ca(backup_managers):
     azure_rel, secret = _azure_relation()
-    ctx, state = _backup_context_and_state(cloud_spec, relations=[azure_rel], secrets=[secret])
+    ctx, state = _backup_context_and_state(relations=[azure_rel], secrets=[secret])
     state = _run_relation_changed(ctx, state, azure_rel)
 
     state_out = _run_relation_broken(ctx, state, azure_rel)
@@ -1493,9 +1477,9 @@ def test_azure_credentials_gone_clears_the_envelope_without_touching_the_ca(
     assert _stored_credentials(state_out, "azure-credentials") is None
 
 
-def test_azure_credentials_gone_on_a_non_leader_keeps_the_envelope(cloud_spec, backup_managers):
+def test_azure_credentials_gone_on_a_non_leader_keeps_the_envelope(backup_managers):
     azure_rel, secret = _azure_relation()
-    ctx, state = _backup_context_and_state(cloud_spec, relations=[azure_rel], secrets=[secret])
+    ctx, state = _backup_context_and_state(relations=[azure_rel], secrets=[secret])
     state = replace(_run_relation_changed(ctx, state, azure_rel), leader=False)
 
     state_out = _run_relation_broken(ctx, state, azure_rel)
@@ -1503,10 +1487,10 @@ def test_azure_credentials_gone_on_a_non_leader_keeps_the_envelope(cloud_spec, b
     assert _stored_credentials(state_out, "azure-credentials") is not None
 
 
-def test_azure_credentials_gone_defers_during_a_backup(cloud_spec, backup_managers):
+def test_azure_credentials_gone_defers_during_a_backup(backup_managers):
     azure_rel, secret = _azure_relation()
     ctx, state = _backup_context_and_state(
-        cloud_spec, relations=[azure_rel], secrets=[secret], unit_data={"backup-id": BACKUP_ID}
+        relations=[azure_rel], secrets=[secret], unit_data={"backup-id": BACKUP_ID}
     )
 
     state_out = _run_relation_broken(ctx, state, azure_rel)
@@ -1514,11 +1498,9 @@ def test_azure_credentials_gone_defers_during_a_backup(cloud_spec, backup_manage
     assert len(state_out.deferred) == 1
 
 
-def test_gcs_credentials_gone_clears_the_envelope_without_touching_the_ca(
-    cloud_spec, backup_managers
-):
+def test_gcs_credentials_gone_clears_the_envelope_without_touching_the_ca(backup_managers):
     gcs_rel, secret = _gcs_relation()
-    ctx, state = _backup_context_and_state(cloud_spec, relations=[gcs_rel], secrets=[secret])
+    ctx, state = _backup_context_and_state(relations=[gcs_rel], secrets=[secret])
     state = _run_relation_changed(ctx, state, gcs_rel)
 
     state_out = _run_relation_broken(ctx, state, gcs_rel)
@@ -1527,9 +1509,9 @@ def test_gcs_credentials_gone_clears_the_envelope_without_touching_the_ca(
     assert _stored_credentials(state_out, "gcs-credentials") is None
 
 
-def test_gcs_credentials_gone_on_a_non_leader_keeps_the_envelope(cloud_spec, backup_managers):
+def test_gcs_credentials_gone_on_a_non_leader_keeps_the_envelope(backup_managers):
     gcs_rel, secret = _gcs_relation()
-    ctx, state = _backup_context_and_state(cloud_spec, relations=[gcs_rel], secrets=[secret])
+    ctx, state = _backup_context_and_state(relations=[gcs_rel], secrets=[secret])
     state = replace(_run_relation_changed(ctx, state, gcs_rel), leader=False)
 
     state_out = _run_relation_broken(ctx, state, gcs_rel)
@@ -1537,10 +1519,10 @@ def test_gcs_credentials_gone_on_a_non_leader_keeps_the_envelope(cloud_spec, bac
     assert _stored_credentials(state_out, "gcs-credentials") is not None
 
 
-def test_gcs_credentials_gone_defers_during_a_backup(cloud_spec, backup_managers):
+def test_gcs_credentials_gone_defers_during_a_backup(backup_managers):
     gcs_rel, secret = _gcs_relation()
     ctx, state = _backup_context_and_state(
-        cloud_spec, relations=[gcs_rel], secrets=[secret], unit_data={"backup-id": BACKUP_ID}
+        relations=[gcs_rel], secrets=[secret], unit_data={"backup-id": BACKUP_ID}
     )
 
     state_out = _run_relation_broken(ctx, state, gcs_rel)
@@ -1559,13 +1541,12 @@ def test_gcs_credentials_gone_defers_during_a_backup(cloud_spec, backup_managers
     ],
 )
 def test_credentials_gone_converges_the_surviving_backend(
-    cloud_spec, backup_managers, removed, survivor, survivor_field
+    backup_managers, removed, survivor, survivor_field
 ):
     """Two integrators conflict; removing one lets the other store its credentials."""
     removed_rel, removed_secret = removed()
     survivor_rel, survivor_secret = survivor()
     ctx, state = _backup_context_and_state(
-        cloud_spec,
         relations=[removed_rel, survivor_rel],
         secrets=[removed_secret, survivor_secret],
     )
@@ -1595,9 +1576,9 @@ def _with_backup_running(state):
     return replace(state, relations={running, *(r for r in state.relations if r.id != 1)})
 
 
-def test_create_backup_action_reports_the_backup_id(cloud_spec, backup_managers, caplog):
+def test_create_backup_action_reports_the_backup_id(backup_managers, caplog):
     s3_rel, secret = _s3_relation()
-    ctx, state = _backup_context_and_state(cloud_spec, relations=[s3_rel], secrets=[secret])
+    ctx, state = _backup_context_and_state(relations=[s3_rel], secrets=[secret])
     state = _with_s3_credentials(ctx, state, backup_managers)
 
     with caplog.at_level(logging.INFO):
@@ -1609,8 +1590,8 @@ def test_create_backup_action_reports_the_backup_id(cloud_spec, backup_managers,
     assert audit and "action_id=42" in audit[0] and "unit=" not in audit[0]
 
 
-def test_create_backup_action_fails_without_a_storage_relation(cloud_spec, backup_managers):
-    ctx, state = _backup_context_and_state(cloud_spec)
+def test_create_backup_action_fails_without_a_storage_relation(backup_managers):
+    ctx, state = _backup_context_and_state()
 
     with pytest.raises(testing.ActionFailed) as exc:
         ctx.run(ctx.on.action("create-backup"), state)
@@ -1621,9 +1602,9 @@ def test_create_backup_action_fails_without_a_storage_relation(cloud_spec, backu
     backup_managers.create_backup.assert_not_called()
 
 
-def test_create_backup_action_fails_without_credentials(cloud_spec, backup_managers):
+def test_create_backup_action_fails_without_credentials(backup_managers):
     s3_rel, secret = _s3_relation()
-    ctx, state = _backup_context_and_state(cloud_spec, relations=[s3_rel], secrets=[secret])
+    ctx, state = _backup_context_and_state(relations=[s3_rel], secrets=[secret])
 
     with pytest.raises(testing.ActionFailed) as exc:
         ctx.run(ctx.on.action("create-backup"), state)
@@ -1631,11 +1612,11 @@ def test_create_backup_action_fails_without_credentials(cloud_spec, backup_manag
     assert "credentials" in exc.value.message.lower()
 
 
-def test_create_backup_action_fails_while_backends_conflict(cloud_spec, backup_managers):
+def test_create_backup_action_fails_while_backends_conflict(backup_managers):
     s3_rel, s3_secret = _s3_relation()
     azure_rel, azure_secret = _azure_relation()
     ctx, state = _backup_context_and_state(
-        cloud_spec, relations=[s3_rel, azure_rel], secrets=[s3_secret, azure_secret]
+        relations=[s3_rel, azure_rel], secrets=[s3_secret, azure_secret]
     )
 
     with pytest.raises(testing.ActionFailed) as exc:
@@ -1644,9 +1625,9 @@ def test_create_backup_action_fails_while_backends_conflict(cloud_spec, backup_m
     assert "exactly one" in exc.value.message
 
 
-def test_create_backup_action_fails_when_valkey_is_down(cloud_spec, backup_managers):
+def test_create_backup_action_fails_when_valkey_is_down(backup_managers):
     s3_rel, secret = _s3_relation()
-    ctx, state = _backup_context_and_state(cloud_spec, relations=[s3_rel], secrets=[secret])
+    ctx, state = _backup_context_and_state(relations=[s3_rel], secrets=[secret])
     state = _with_s3_credentials(ctx, state, backup_managers)
     backup_managers.alive.return_value = False
 
@@ -1656,9 +1637,9 @@ def test_create_backup_action_fails_when_valkey_is_down(cloud_spec, backup_manag
     assert "not running" in exc.value.message
 
 
-def test_create_backup_action_fails_while_a_backup_is_running_here(cloud_spec, backup_managers):
+def test_create_backup_action_fails_while_a_backup_is_running_here(backup_managers):
     s3_rel, secret = _s3_relation()
-    ctx, state = _backup_context_and_state(cloud_spec, relations=[s3_rel], secrets=[secret])
+    ctx, state = _backup_context_and_state(relations=[s3_rel], secrets=[secret])
     state = _with_backup_running(_with_s3_credentials(ctx, state, backup_managers))
 
     with pytest.raises(testing.ActionFailed) as exc:
@@ -1668,9 +1649,9 @@ def test_create_backup_action_fails_while_a_backup_is_running_here(cloud_spec, b
     backup_managers.create_backup.assert_not_called()
 
 
-def test_create_backup_action_reports_a_backup_error(cloud_spec, backup_managers):
+def test_create_backup_action_reports_a_backup_error(backup_managers):
     s3_rel, secret = _s3_relation()
-    ctx, state = _backup_context_and_state(cloud_spec, relations=[s3_rel], secrets=[secret])
+    ctx, state = _backup_context_and_state(relations=[s3_rel], secrets=[secret])
     state = _with_s3_credentials(ctx, state, backup_managers)
     backup_managers.create_backup.side_effect = ValkeyBackupError("boom")
 
@@ -1678,12 +1659,12 @@ def test_create_backup_action_reports_a_backup_error(cloud_spec, backup_managers
         ctx.run(ctx.on.action("create-backup"), state)
 
 
-def test_restore_and_backup_guards_share_the_storage_checks(cloud_spec, backup_managers):
+def test_restore_and_backup_guards_share_the_storage_checks(backup_managers):
     """Both actions gate on backup storage the same way, from one implementation."""
     s3_rel, s3_secret = _s3_relation()
     azure_rel, azure_secret = _azure_relation()
     ctx, state = _backup_context_and_state(
-        cloud_spec, relations=[s3_rel, azure_rel], secrets=[s3_secret, azure_secret]
+        relations=[s3_rel, azure_rel], secrets=[s3_secret, azure_secret]
     )
 
     with ctx(ctx.on.update_status(), state) as manager:
@@ -1691,9 +1672,9 @@ def test_restore_and_backup_guards_share_the_storage_checks(cloud_spec, backup_m
         assert events._blocking_reason() == events._restore_blocking_reason(BACKUP_ID)
 
 
-def test_list_backups_action_returns_a_table(cloud_spec, backup_managers):
+def test_list_backups_action_returns_a_table(backup_managers):
     s3_rel, secret = _s3_relation()
-    ctx, state = _backup_context_and_state(cloud_spec, relations=[s3_rel], secrets=[secret])
+    ctx, state = _backup_context_and_state(relations=[s3_rel], secrets=[secret])
     state = _with_s3_credentials(ctx, state, backup_managers)
     backup_managers.list_backups.return_value = [BACKUP_ID]
 
@@ -1702,9 +1683,9 @@ def test_list_backups_action_returns_a_table(cloud_spec, backup_managers):
     assert BACKUP_ID in ctx.action_results["backups"]
 
 
-def test_list_backups_action_returns_json(cloud_spec, backup_managers):
+def test_list_backups_action_returns_json(backup_managers):
     s3_rel, secret = _s3_relation()
-    ctx, state = _backup_context_and_state(cloud_spec, relations=[s3_rel], secrets=[secret])
+    ctx, state = _backup_context_and_state(relations=[s3_rel], secrets=[secret])
     state = _with_s3_credentials(ctx, state, backup_managers)
     backup_managers.list_backups.return_value = ["2026-05-14T10:00:00Z", BACKUP_ID]
 
@@ -1716,9 +1697,9 @@ def test_list_backups_action_returns_json(cloud_spec, backup_managers):
     ]
 
 
-def test_list_backups_action_rejects_an_invalid_format(cloud_spec, backup_managers):
+def test_list_backups_action_rejects_an_invalid_format(backup_managers):
     s3_rel, secret = _s3_relation()
-    ctx, state = _backup_context_and_state(cloud_spec, relations=[s3_rel], secrets=[secret])
+    ctx, state = _backup_context_and_state(relations=[s3_rel], secrets=[secret])
 
     with pytest.raises(testing.ActionFailed) as exc:
         ctx.run(ctx.on.action("list-backups", params={"output": "yaml"}), state)
@@ -1727,10 +1708,10 @@ def test_list_backups_action_rejects_an_invalid_format(cloud_spec, backup_manage
     backup_managers.list_backups.assert_not_called()
 
 
-def test_list_backups_action_runs_while_a_backup_is_running_here(cloud_spec, backup_managers):
+def test_list_backups_action_runs_while_a_backup_is_running_here(backup_managers):
     """list-backups is read-only, so a backup on this unit must not block it."""
     s3_rel, secret = _s3_relation()
-    ctx, state = _backup_context_and_state(cloud_spec, relations=[s3_rel], secrets=[secret])
+    ctx, state = _backup_context_and_state(relations=[s3_rel], secrets=[secret])
     state = _with_backup_running(_with_s3_credentials(ctx, state, backup_managers))
 
     ctx.run(ctx.on.action("list-backups"), state)

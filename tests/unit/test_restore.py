@@ -872,9 +872,7 @@ def test_blocking_reason_blocks_backup_during_restore(mocker):
 # peer-relation data-interface wiring is part of the test.
 
 
-def _restore_context_and_state(
-    cloud_spec, *, leader=True, app_data=None, unit_data=None, peers_data=None
-):
+def _restore_context_and_state(*, leader=True, app_data=None, unit_data=None, peers_data=None):
     """Build a Context + State wired for the restore workflow.
 
     ``peers_data`` (``{unit_id: {hyphen-keyed databag}}``) adds peer units, so a
@@ -901,7 +899,7 @@ def _restore_context_and_state(
         id=3, endpoint=S3_RELATION_NAME, interface="s3", remote_app_name="s3-integrator"
     )
     state = testing.State(
-        model=testing.Model(name="m", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="m", type="lxd"),
         leader=leader,
         relations={peer, status_peer, s3_rel},
         containers={testing.Container(name="valkey", can_connect=True)},
@@ -1009,12 +1007,12 @@ def _pass_restore_preconditions(mocker, backups):
 # ── restore action ───────────────────────────────────────────────────────────
 
 
-def test_restore_action_initiates_workflow(mocker, cloud_spec, restore_managers):
+def test_restore_action_initiates_workflow(mocker, restore_managers):
     """`restore` on the leader validates, then writes the workflow's app-databag target."""
     from src.literals import RestoreStep
 
     _pass_restore_preconditions(mocker, ["2026-05-13T10:00:00Z"])
-    ctx, state = _restore_context_and_state(cloud_spec)
+    ctx, state = _restore_context_and_state()
 
     state_out = ctx.run(
         ctx.on.action("restore", params={"backup-id": "2026-05-13T10:00:00Z"}), state
@@ -1029,7 +1027,7 @@ def test_restore_action_initiates_workflow(mocker, cloud_spec, restore_managers)
     restore_managers.restore_on_primary.assert_not_called()
 
 
-def test_restore_action_logs_every_rejection(mocker, cloud_spec, restore_managers, caplog):
+def test_restore_action_logs_every_rejection(mocker, restore_managers, caplog):
     """Every rejected restore action leaves a traceable log line, not just a failed task.
 
     The action result is transient; the unit log must show why a restore
@@ -1040,7 +1038,7 @@ def test_restore_action_logs_every_rejection(mocker, cloud_spec, restore_manager
     from ops.testing import ActionFailed
 
     _pass_restore_preconditions(mocker, ["2026-05-13T10:00:00Z"])
-    ctx, state = _restore_context_and_state(cloud_spec)
+    ctx, state = _restore_context_and_state()
 
     with caplog.at_level(logging.WARNING), pytest.raises(ActionFailed):
         ctx.run(ctx.on.action("restore", params={"backup-id": "2026-01-01T00:00:00Z"}), state)
@@ -1048,19 +1046,18 @@ def test_restore_action_logs_every_rejection(mocker, cloud_spec, restore_manager
     assert "2026-01-01T00:00:00Z" in caplog.text  # the unknown backup-id is in the log
 
     caplog.clear()
-    ctx, state = _restore_context_and_state(cloud_spec, leader=False)
+    ctx, state = _restore_context_and_state(leader=False)
     with caplog.at_level(logging.WARNING), pytest.raises(ActionFailed):
         ctx.run(ctx.on.action("restore", params={"backup-id": "2026-05-13T10:00:00Z"}), state)
     assert "restore.rejected" in caplog.text
     assert "leader" in caplog.text
 
 
-def test_restore_workflow_logs_each_transition(cloud_spec, restore_managers, caplog):
+def test_restore_workflow_logs_each_transition(restore_managers, caplog):
     """A full restore leaves a step-by-step trail in the unit log (review: hard to follow)."""
     import logging
 
     ctx, state = _restore_context_and_state(
-        cloud_spec,
         app_data={
             "restore-id": "2026-05-13T10:00:00Z",
             "restore-instruction": RestoreStep.RESTORE.value,
@@ -1084,11 +1081,11 @@ def test_restore_workflow_logs_each_transition(cloud_spec, restore_managers, cap
     assert "unit=" not in caplog.text
 
 
-def test_restore_action_rejected_on_non_leader(cloud_spec):
+def test_restore_action_rejected_on_non_leader():
     """A follower must refuse restore and write nothing to the app databag."""
     from ops import testing
 
-    ctx, state = _restore_context_and_state(cloud_spec, leader=False)
+    ctx, state = _restore_context_and_state(leader=False)
     with pytest.raises(testing.ActionFailed) as exc:
         ctx.run(ctx.on.action("restore", params={"backup-id": "2026-05-13T10:00:00Z"}), state)
 
@@ -1096,12 +1093,12 @@ def test_restore_action_rejected_on_non_leader(cloud_spec):
     assert _peer_app_data(exc.value.state).get("restore-id", "") == ""
 
 
-def test_restore_action_rejects_unknown_backup_id(mocker, cloud_spec, restore_managers):
+def test_restore_action_rejects_unknown_backup_id(mocker, restore_managers):
     """An unknown backup-id fails the action and never initiates the workflow."""
     from ops import testing
 
     _pass_restore_preconditions(mocker, ["2026-05-13T10:00:00Z"])
-    ctx, state = _restore_context_and_state(cloud_spec)
+    ctx, state = _restore_context_and_state()
 
     with pytest.raises(testing.ActionFailed) as exc:
         ctx.run(ctx.on.action("restore", params={"backup-id": "nope"}), state)
@@ -1113,7 +1110,7 @@ def test_restore_action_rejects_unknown_backup_id(mocker, cloud_spec, restore_ma
 # ── restore workflow state machine ───────────────────────────────────────────
 
 
-def test_single_unit_restore_completes_via_relation_changed_cascade(cloud_spec, restore_managers):
+def test_single_unit_restore_completes_via_relation_changed_cascade(restore_managers):
     """A single-unit restore converges to done (id + per-unit step cleared).
 
     A single unit is always the leader, and Juju delivers relation_changed to the
@@ -1122,7 +1119,6 @@ def test_single_unit_restore_completes_via_relation_changed_cascade(cloud_spec, 
     and no in-hook loop needed.
     """
     ctx, state = _restore_context_and_state(
-        cloud_spec,
         app_data={
             "restore-id": "2026-05-13T10:00:00Z",
             "restore-instruction": RestoreStep.RESTORE.value,
@@ -1136,10 +1132,9 @@ def test_single_unit_restore_completes_via_relation_changed_cascade(cloud_spec, 
     assert _peer_unit_data(state_out).get("restore-step", "") == ""
 
 
-def test_primary_runs_full_restore_workflow(cloud_spec, restore_managers):
+def test_primary_runs_full_restore_workflow(restore_managers):
     """A single-unit primary drives RESTORE→RESYNC→COMPLETED and clears state, no rollback."""
     ctx, state = _restore_context_and_state(
-        cloud_spec,
         app_data={
             "restore-id": "2026-05-13T10:00:00Z",
             "restore-instruction": RestoreStep.RESTORE.value,
@@ -1159,7 +1154,7 @@ def test_primary_runs_full_restore_workflow(cloud_spec, restore_managers):
     assert _peer_unit_data(state_out).get("restore-step", "") == ""
 
 
-def test_primary_saves_dataset_before_restore(cloud_spec, restore_managers):
+def test_primary_saves_dataset_before_restore(restore_managers):
     """The primary persists in-memory data to disk before restoring.
 
     restore_on_primary moves the on-disk dump aside as the rollback copy, which is
@@ -1170,7 +1165,6 @@ def test_primary_saves_dataset_before_restore(cloud_spec, restore_managers):
     restore_managers.save_dataset_before_shutdown.side_effect = lambda: order.append("save")
     restore_managers.restore_on_primary.side_effect = lambda: order.append("restore")
     ctx, state = _restore_context_and_state(
-        cloud_spec,
         app_data={
             "restore-id": "2026-05-13T10:00:00Z",
             "restore-instruction": RestoreStep.RESTORE.value,
@@ -1183,7 +1177,7 @@ def test_primary_saves_dataset_before_restore(cloud_spec, restore_managers):
     assert order == ["save", "restore"]  # persisted before the swap
 
 
-def test_save_failure_aborts_restore_without_rollback(cloud_spec, restore_managers):
+def test_save_failure_aborts_restore_without_rollback(restore_managers):
     """If the pre-restore save fails, the primary is never stopped and nothing rolls back."""
     from common.exceptions import ValkeyWorkloadCommandError
 
@@ -1191,7 +1185,6 @@ def test_save_failure_aborts_restore_without_rollback(cloud_spec, restore_manage
         "save failed"
     )
     ctx, state = _restore_context_and_state(
-        cloud_spec,
         app_data={
             "restore-id": "2026-05-13T10:00:00Z",
             "restore-instruction": RestoreStep.RESTORE.value,
@@ -1206,7 +1199,7 @@ def test_save_failure_aborts_restore_without_rollback(cloud_spec, restore_manage
     assert _peer_app_data(state_out).get("restore-id", "") == ""  # torn down
 
 
-def test_redelivered_restore_rolls_back_and_fails(cloud_spec, restore_managers, mocker):
+def test_redelivered_restore_rolls_back_and_fails(restore_managers, mocker):
     """Crash mid-swap + redelivery must roll back to the pre-restore data and FAIL.
 
     After a crash inside restore_on_primary, valkey is stopped and Juju never
@@ -1222,7 +1215,6 @@ def test_redelivered_restore_rolls_back_and_fails(cloud_spec, restore_managers, 
     mocker.patch("workload_k8s.ValkeyK8sWorkload.alive", return_value=False)
 
     ctx, state = _restore_context_and_state(
-        cloud_spec,
         app_data={
             "restore-id": "2026-05-13T10:00:00Z",
             "restore-instruction": RestoreStep.RESTORE.value,
@@ -1246,7 +1238,7 @@ def test_redelivered_restore_rolls_back_and_fails(cloud_spec, restore_managers, 
     assert _peer_app_data(state_out).get("restore-id", "") == ""  # torn down
 
 
-def test_replica_redelivery_does_not_resume_as_primary(cloud_spec, restore_managers):
+def test_replica_redelivery_does_not_resume_as_primary(restore_managers):
     """A participant whose valkey is down but has NO pre-restore copy must not resume-as-primary.
 
     Only a mid-swap primary leaves a pre-restore copy; a replica whose valkey merely
@@ -1258,7 +1250,6 @@ def test_replica_redelivery_does_not_resume_as_primary(cloud_spec, restore_manag
     restore_managers.has_pre_restore_copy.return_value = False  # no copy -> not a mid-swap primary
     restore_managers.is_primary.side_effect = ValkeyWorkloadCommandError("down")
     ctx, state = _restore_context_and_state(
-        cloud_spec,
         leader=False,
         app_data={
             "restore-id": "2026-05-13T10:00:00Z",
@@ -1277,14 +1268,13 @@ def test_replica_redelivery_does_not_resume_as_primary(cloud_spec, restore_manag
     assert _peer_unit_data(state_out)["restore-failed"] == "failed:tok-r"
 
 
-def test_primary_reconciles_min_replicas_after_restore(cloud_spec, restore_managers):
+def test_primary_reconciles_min_replicas_after_restore(restore_managers):
     """After the primary restarts on the restored RDB, min-replicas-to-write is reasserted.
 
     A raw stop/start bypasses the rolling-restart path, so the topology-correct
     runtime value must be reconciled explicitly or a small cluster stays write-frozen.
     """
     ctx, state = _restore_context_and_state(
-        cloud_spec,
         app_data={
             "restore-id": "2026-05-13T10:00:00Z",
             "restore-instruction": RestoreStep.RESTORE.value,
@@ -1297,7 +1287,7 @@ def test_primary_reconciles_min_replicas_after_restore(cloud_spec, restore_manag
     restore_managers.reconcile_min_replicas_to_write.assert_called_once()
 
 
-def test_reconciles_min_replicas_after_rollback(cloud_spec, restore_managers):
+def test_reconciles_min_replicas_after_rollback(restore_managers):
     """A failed restore rolls back (another restart), so min-replicas must be reasserted too.
 
     roll_back does a raw stop/start that reverts the runtime value; without this a
@@ -1307,7 +1297,6 @@ def test_reconciles_min_replicas_after_rollback(cloud_spec, restore_managers):
 
     restore_managers.restore_on_primary.side_effect = ValkeyServicesFailedToStartError("boom")
     ctx, state = _restore_context_and_state(
-        cloud_spec,
         app_data={
             "restore-id": "2026-05-13T10:00:00Z",
             "restore-instruction": RestoreStep.RESTORE.value,
@@ -1321,7 +1310,7 @@ def test_reconciles_min_replicas_after_rollback(cloud_spec, restore_managers):
     restore_managers.reconcile_min_replicas_to_write.assert_called_once()
 
 
-def test_reconcile_failure_does_not_fail_a_successful_restore(cloud_spec, restore_managers):
+def test_reconcile_failure_does_not_fail_a_successful_restore(restore_managers):
     """A raise from the post-restart min-replicas reconcile must not fail a good restore.
 
     reconcile runs in a finally; the manager swallows its expected errors, but an
@@ -1338,7 +1327,6 @@ def test_reconcile_failure_does_not_fail_a_successful_restore(cloud_spec, restor
         *([None] * 20),
     ]
     ctx, state = _restore_context_and_state(
-        cloud_spec,
         app_data={
             "restore-id": "2026-05-13T10:00:00Z",
             "restore-instruction": RestoreStep.RESTORE.value,
@@ -1355,7 +1343,7 @@ def test_reconcile_failure_does_not_fail_a_successful_restore(cloud_spec, restor
     assert _peer_app_data(state_out).get("restore-id", "") == ""
 
 
-def test_replica_records_role_and_barrier_holds(cloud_spec, restore_managers):
+def test_replica_records_role_and_barrier_holds(restore_managers):
     """A replica records role/step but never restores; the barrier waits on a lagging peer.
 
     valkey/1 is still a peer-relation member (present) but hasn't recorded RESTORE
@@ -1364,7 +1352,6 @@ def test_replica_records_role_and_barrier_holds(cloud_spec, restore_managers):
     """
     restore_managers.is_primary.return_value = False
     ctx, state = _restore_context_and_state(
-        cloud_spec,
         app_data={
             "restore-id": "2026-05-13T10:00:00Z",
             "restore-instruction": RestoreStep.RESTORE.value,
@@ -1386,7 +1373,7 @@ def test_replica_records_role_and_barrier_holds(cloud_spec, restore_managers):
     assert _peer_app_data(state_out)["restore-instruction"] == RestoreStep.RESTORE.value
 
 
-def test_leader_fails_restore_when_participant_departs(cloud_spec, restore_managers):
+def test_leader_fails_restore_when_participant_departs(restore_managers):
     """A participant that vanished mid-restore must not wedge the cluster forever.
 
     valkey/1 was snapshotted as a participant at initiation but is no longer a
@@ -1402,7 +1389,6 @@ def test_leader_fails_restore_when_participant_departs(cloud_spec, restore_manag
     # blocker is the absent valkey/1 -- i.e. the wedge, not a normal lagging wait.
     restore_managers.is_primary.return_value = False
     ctx, state = _restore_context_and_state(
-        cloud_spec,
         leader=True,
         app_data={
             "restore-id": "2026-05-13T10:00:00Z",
@@ -1427,7 +1413,7 @@ def test_leader_fails_restore_when_participant_departs(cloud_spec, restore_manag
     restore_managers.resume_failover.assert_called()
 
 
-def test_non_leader_does_not_fail_restore_on_departed_participant(cloud_spec, restore_managers):
+def test_non_leader_does_not_fail_restore_on_departed_participant(restore_managers):
     """Only the leader may tear a restore down when a participant departs.
 
     A non-leader that observes a departed participant must leave app state alone
@@ -1435,7 +1421,6 @@ def test_non_leader_does_not_fail_restore_on_departed_participant(cloud_spec, re
     """
     restore_managers.is_primary.return_value = False
     ctx, state = _restore_context_and_state(
-        cloud_spec,
         leader=False,
         app_data={
             "restore-id": "2026-05-13T10:00:00Z",
@@ -1453,10 +1438,9 @@ def test_non_leader_does_not_fail_restore_on_departed_participant(cloud_spec, re
     restore_managers.resume_failover.assert_not_called()
 
 
-def test_step_skipped_when_prior_not_reached(cloud_spec, restore_managers):
+def test_step_skipped_when_prior_not_reached(restore_managers):
     """instruction=RESYNC but this unit never recorded RESTORE → it acts on nothing."""
     ctx, state = _restore_context_and_state(
-        cloud_spec,
         app_data={
             "restore-id": "2026-05-13T10:00:00Z",
             "restore-instruction": RestoreStep.RESYNC.value,
@@ -1474,7 +1458,7 @@ def test_step_skipped_when_prior_not_reached(cloud_spec, restore_managers):
     assert _peer_app_data(state_out)["restore-instruction"] == RestoreStep.RESYNC.value
 
 
-def test_non_participant_unit_skips_restore_workflow(cloud_spec, restore_managers):
+def test_non_participant_unit_skips_restore_workflow(restore_managers):
     """A unit that joined AFTER initiation (absent from restore_participants) must no-op.
 
     Otherwise it matches (RESTORE, NOT_STARTED), queries its own not-yet-started
@@ -1489,7 +1473,6 @@ def test_non_participant_unit_skips_restore_workflow(cloud_spec, restore_manager
     # is_primary() would raise -> broad except -> _fail_restore -> resume_failover.
     restore_managers.is_primary.side_effect = ValkeyWorkloadCommandError("not up")
     ctx, state = _restore_context_and_state(
-        cloud_spec,
         leader=False,  # a freshly-joined unit is not the leader
         app_data={
             "restore-id": "2026-05-13T10:00:00Z",
@@ -1511,7 +1494,7 @@ def test_non_participant_unit_skips_restore_workflow(cloud_spec, restore_manager
     assert _peer_unit_data(state_out).get("restore-failed", "") == ""
 
 
-def test_non_participant_leader_advances_restore(cloud_spec, restore_managers):
+def test_non_participant_leader_advances_restore(restore_managers):
     """A non-participant LEADER must still advance the barrier, not wedge the restore.
 
     If leadership drifts to a unit that joined after initiation (a non-participant)
@@ -1520,7 +1503,6 @@ def test_non_participant_leader_advances_restore(cloud_spec, restore_managers):
     advances the barrier and the restore wedges in-progress forever.
     """
     ctx, state = _restore_context_and_state(
-        cloud_spec,
         leader=True,
         app_data={
             "restore-id": "2026-05-13T10:00:00Z",
@@ -1540,13 +1522,12 @@ def test_non_participant_leader_advances_restore(cloud_spec, restore_managers):
     assert _peer_app_data(state_out)["restore-instruction"] == RestoreStep.RESYNC.value
 
 
-def test_bad_backup_fails_restore_before_stopping_primary(cloud_spec, restore_managers):
+def test_bad_backup_fails_restore_before_stopping_primary(restore_managers):
     """A non-RDB backup fails the pre-stop check: the primary is never stopped or rolled back."""
     from common.exceptions import ValkeyRestoreError
 
     restore_managers.verify_backup_is_rdb.side_effect = ValkeyRestoreError("not an RDB")
     ctx, state = _restore_context_and_state(
-        cloud_spec,
         app_data={
             "restore-id": "2026-05-13T10:00:00Z",
             "restore-instruction": RestoreStep.RESTORE.value,
@@ -1564,7 +1545,7 @@ def test_bad_backup_fails_restore_before_stopping_primary(cloud_spec, restore_ma
     assert _peer_app_data(state_out).get("restore-id", "") == ""
 
 
-def test_restore_failure_rolls_back_and_resumes_failover(cloud_spec, restore_managers):
+def test_restore_failure_rolls_back_and_resumes_failover(restore_managers):
     """A service failure mid-restore rolls back, resumes failover, flags FAILED, clears state.
 
     Regression for FIX 1: service-control errors are standalone Exception
@@ -1576,7 +1557,6 @@ def test_restore_failure_rolls_back_and_resumes_failover(cloud_spec, restore_man
 
     restore_managers.restore_on_primary.side_effect = ValkeyServicesFailedToStartError("boom")
     ctx, state = _restore_context_and_state(
-        cloud_spec,
         app_data={
             "restore-id": "2026-05-13T10:00:00Z",
             "restore-instruction": RestoreStep.RESTORE.value,
@@ -1598,14 +1578,13 @@ def test_restore_failure_rolls_back_and_resumes_failover(cloud_spec, restore_man
     assert _peer_app_data(state_out).get("restore-id", "") == ""
 
 
-def test_restore_failure_unhealthy_status(cloud_spec, restore_managers):
+def test_restore_failure_unhealthy_status(restore_managers):
     """A cluster-not-ready failure surfaces RESTORE_UNHEALTHY, not RESTORE_FAILED."""
     from common.exceptions import ValkeyClusterNotReadyError
     from src.statuses import RestoreStatuses
 
     restore_managers.wait_until_loaded.side_effect = ValkeyClusterNotReadyError("unhealthy")
     ctx, state = _restore_context_and_state(
-        cloud_spec,
         app_data={
             "restore-id": "2026-05-13T10:00:00Z",
             "restore-instruction": RestoreStep.RESTORE.value,
@@ -1634,7 +1613,7 @@ def test_restore_failure_unhealthy_status(cloud_spec, restore_managers):
 # in "restore in progress" forever.
 
 
-def test_non_leader_primary_failure_records_failure_marker(cloud_spec, restore_managers):
+def test_non_leader_primary_failure_records_failure_marker(restore_managers):
     """A non-leader primary whose restore fails records a per-unit failure marker.
 
     It cannot clear the app-level restore_id (leader-only), so it must leave a
@@ -1644,7 +1623,6 @@ def test_non_leader_primary_failure_records_failure_marker(cloud_spec, restore_m
 
     restore_managers.restore_on_primary.side_effect = ValkeyServicesFailedToStartError("boom")
     ctx, state = _restore_context_and_state(
-        cloud_spec,
         leader=False,
         app_data={
             "restore-id": "2026-05-13T10:00:00Z",
@@ -1663,7 +1641,7 @@ def test_non_leader_primary_failure_records_failure_marker(cloud_spec, restore_m
     assert _peer_unit_data(state_out)["restore-failed"] == "failed:tok-1"
 
 
-def test_leader_ends_restore_when_peer_restore_failed(cloud_spec, restore_managers):
+def test_leader_ends_restore_when_peer_restore_failed(restore_managers):
     """The leader clears the app-level restore state when a *peer* reports failure.
 
     valkey/1 (a non-leader) recorded a failure for this attempt's token; the
@@ -1674,7 +1652,6 @@ def test_leader_ends_restore_when_peer_restore_failed(cloud_spec, restore_manage
     from src.statuses import RestoreStatuses
 
     ctx, state = _restore_context_and_state(
-        cloud_spec,
         leader=True,
         app_data={
             "restore-id": "2026-05-13T10:00:00Z",
@@ -1700,7 +1677,7 @@ def test_leader_ends_restore_when_peer_restore_failed(cloud_spec, restore_manage
     assert _peer_app_data(state_out).get("restore-id", "") == ""
 
 
-def test_fail_restore_records_failure_even_if_resume_failover_raises(cloud_spec, restore_managers):
+def test_fail_restore_records_failure_even_if_resume_failover_raises(restore_managers):
     """A raising resume_failover must not abort teardown (else restore re-wedges).
 
     resume_failover hits every sentinel via the CLI and can raise; teardown must
@@ -1713,7 +1690,6 @@ def test_fail_restore_records_failure_even_if_resume_failover_raises(cloud_spec,
     restore_managers.restore_on_primary.side_effect = ValkeyServicesFailedToStartError("boom")
     restore_managers.resume_failover.side_effect = ValkeyWorkloadCommandError("sentinel down")
     ctx, state = _restore_context_and_state(
-        cloud_spec,
         leader=True,
         app_data={
             "restore-id": "2026-05-13T10:00:00Z",
@@ -1781,7 +1757,7 @@ def test_finish_failed_restore_clears_state_before_resume_failover(mocker):
     assert ev.charm.state.cluster.update.call_args.args[0]["restore_id"] == ""
 
 
-def test_stale_token_marker_ignored_for_new_restore(cloud_spec, restore_managers):
+def test_stale_token_marker_ignored_for_new_restore(restore_managers):
     """A failure marker from a PRIOR attempt must not abort the current restore.
 
     restore_id is the backup-id, so a same-backup re-run reuses it; the marker is
@@ -1790,7 +1766,6 @@ def test_stale_token_marker_ignored_for_new_restore(cloud_spec, restore_managers
     leader proceeds with the restore rather than false-aborting it.
     """
     ctx, state = _restore_context_and_state(
-        cloud_spec,
         leader=True,
         app_data={
             "restore-id": "2026-05-13T10:00:00Z",
@@ -1809,7 +1784,7 @@ def test_stale_token_marker_ignored_for_new_restore(cloud_spec, restore_managers
     assert _peer_app_data(state_out).get("restore-id", "") == ""  # completed normally
 
 
-def test_restore_action_clears_stale_terminal_statuses(mocker, cloud_spec, restore_managers):
+def test_restore_action_clears_stale_terminal_statuses(mocker, restore_managers):
     """Initiating a restore clears BOTH stale terminal statuses (FAILED and UNHEALTHY)."""
     from data_platform_helpers.advanced_statuses.components import StatusesState
 
@@ -1817,7 +1792,7 @@ def test_restore_action_clears_stale_terminal_statuses(mocker, cloud_spec, resto
 
     _pass_restore_preconditions(mocker, ["2026-05-13T10:00:00Z"])
     delete = mocker.patch.object(StatusesState, "delete")
-    ctx, state = _restore_context_and_state(cloud_spec)
+    ctx, state = _restore_context_and_state()
 
     ctx.run(ctx.on.action("restore", params={"backup-id": "2026-05-13T10:00:00Z"}), state)
 
@@ -1826,7 +1801,7 @@ def test_restore_action_clears_stale_terminal_statuses(mocker, cloud_spec, resto
     assert RestoreStatuses.RESTORE_UNHEALTHY.value in deleted
 
 
-def test_completed_restore_clears_terminal_statuses(mocker, cloud_spec, restore_managers):
+def test_completed_restore_clears_terminal_statuses(mocker, restore_managers):
     """A restore that reaches COMPLETED clears BOTH terminal statuses (FAILED and UNHEALTHY)."""
     from data_platform_helpers.advanced_statuses.components import StatusesState
 
@@ -1834,7 +1809,6 @@ def test_completed_restore_clears_terminal_statuses(mocker, cloud_spec, restore_
 
     delete = mocker.patch.object(StatusesState, "delete")
     ctx, state = _restore_context_and_state(
-        cloud_spec,
         app_data={
             "restore-id": "2026-05-13T10:00:00Z",
             "restore-token": "tok-3",
@@ -1856,7 +1830,7 @@ def test_completed_restore_clears_terminal_statuses(mocker, cloud_spec, restore_
 # restore left suppressed, so it runs on every hook the workflow observes.
 
 
-def test_update_status_resumes_failover_left_suppressed(mocker, cloud_spec, restore_managers):
+def test_update_status_resumes_failover_left_suppressed(mocker, restore_managers):
     """A sentinel still at the suppressed down-after outside a restore is resumed.
 
     resume_failover is best-effort on every teardown path and Sentinel persists
@@ -1871,16 +1845,14 @@ def test_update_status_resumes_failover_left_suppressed(mocker, cloud_spec, rest
     restore_managers.resume_local_failover.side_effect = lambda: setattr(
         restore_managers.is_failover_suppressed, "return_value", False
     )
-    ctx, state = _restore_context_and_state(cloud_spec)  # no restore in progress
+    ctx, state = _restore_context_and_state()  # no restore in progress
 
     ctx.run(ctx.on.update_status(), state)
 
     restore_managers.resume_local_failover.assert_called_once()
 
 
-def test_peer_relation_changed_resumes_failover_left_suppressed(
-    mocker, cloud_spec, restore_managers
-):
+def test_peer_relation_changed_resumes_failover_left_suppressed(mocker, restore_managers):
     """The self-heal also runs on the peer hook, not only on the 5-minute backstop.
 
     A restore ends by clearing the app-level restore-id, which re-delivers peer
@@ -1889,7 +1861,6 @@ def test_peer_relation_changed_resumes_failover_left_suppressed(
     """
     restore_managers.is_failover_suppressed.return_value = True
     ctx, state = _restore_context_and_state(
-        cloud_spec,
         leader=False,  # no restore in progress
         peers_data={1: {"start-state": "started"}},
     )
@@ -1900,11 +1871,10 @@ def test_peer_relation_changed_resumes_failover_left_suppressed(
     restore_managers.resume_local_failover.assert_called_once()
 
 
-def test_update_status_keeps_suppression_during_restore(mocker, cloud_spec, restore_managers):
+def test_update_status_keeps_suppression_during_restore(mocker, restore_managers):
     """Suppression is by design mid-restore: the self-heal must not undo it."""
     restore_managers.is_failover_suppressed.return_value = True
     ctx, state = _restore_context_and_state(
-        cloud_spec,
         app_data={
             "restore-id": "2026-05-13T10:00:00Z",
             "restore-instruction": RestoreStep.RESTORE.value,
@@ -1917,14 +1887,12 @@ def test_update_status_keeps_suppression_during_restore(mocker, cloud_spec, rest
     restore_managers.resume_local_failover.assert_not_called()
 
 
-def test_update_status_suppression_check_tolerates_sentinel_error(
-    mocker, cloud_spec, restore_managers
-):
+def test_update_status_suppression_check_tolerates_sentinel_error(mocker, restore_managers):
     """A sentinel that can't be queried is skipped (retried next update-status), not a crash."""
     from common.exceptions import ValkeyWorkloadCommandError
 
     restore_managers.is_failover_suppressed.side_effect = ValkeyWorkloadCommandError("down")
-    ctx, state = _restore_context_and_state(cloud_spec)
+    ctx, state = _restore_context_and_state()
 
     ctx.run(ctx.on.update_status(), state)  # must not raise
 
