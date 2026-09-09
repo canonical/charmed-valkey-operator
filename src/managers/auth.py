@@ -169,7 +169,7 @@ class AuthManager(ManagerStatusProtocol):
             logger.warning("LDAP CA certificate not stored yet, omitting LDAP users from the ACL")
             return acl_content
 
-        self.state.unit_server.update({"ldap-sync-failed": False})
+        self.state.unit_server.update({"ldap-sync-failed": ""})
 
         # get non-LDAP users to avoid adding duplicate usernames to ACL files
         internal_users = [user.value for user in CharmUsers]
