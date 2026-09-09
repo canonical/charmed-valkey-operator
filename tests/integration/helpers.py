@@ -22,7 +22,7 @@ from glide import (
     ServerCredentials,
     TlsAdvancedConfiguration,
 )
-from ops import SecretNotFoundError
+from ops import SecretNotFoundError, StatusBase
 from tenacity import Retrying, stop_after_delay, wait_fixed
 
 from literals import (
@@ -37,7 +37,6 @@ from literals import (
     Substrate,
 )
 from tests.integration.glide_helpers import serialize_glide_config
-from tests.integration.status_match import does_message_match
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +124,24 @@ def _does_app_status_match(
         )
         for app, expected_status in expected_statuses.items()
     )
+
+
+def does_message_match(expected_status_message: str, status: StatusObject) -> bool:
+    """Check if the status message matches the expected message."""
+    try:
+        juju_status = StatusBase.from_name(status.status, status.message)
+        return (
+            expected_status_message == juju_status.message
+            or expected_status_message.startswith(juju_status.message)
+            or juju_status.message.startswith(f"{expected_status_message:.40}")
+            or (
+                status.short_message is not None
+                and status.short_message in expected_status_message
+            )
+        )
+    except KeyError as e:
+        logger.error("Error attempting to convert StatusObject to ops.StatusBase: %s", e)
+        return False
 
 
 def are_apps_active_and_agents_idle(
