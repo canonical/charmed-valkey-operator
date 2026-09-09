@@ -30,7 +30,7 @@ METADATA = yaml.safe_load(Path("./metadata.yaml").read_text())
 APP_NAME = METADATA["name"]
 
 
-def test_add_new_client_user(cloud_spec):
+def test_add_new_client_user():
     primary_endpoint = "valkey-0.valkey-endpoints"
     replica_endpoint = "valkey-1.valkey-endpoints"
     valkey_version = "9.0.1"
@@ -59,7 +59,7 @@ def test_add_new_client_user(cloud_spec):
         leader=True,
         relations={peer_relation, status_peer_relation, client_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with (
@@ -107,7 +107,7 @@ def test_add_new_client_user(cloud_spec):
         assert secret_tls.latest_content.get("tls") == "false"
 
 
-def test_add_new_client_user_v0(cloud_spec):
+def test_add_new_client_user_v0():
     primary_endpoint = "valkey-0.valkey-endpoints"
     replica_endpoint = "valkey-1.valkey-endpoints"
     valkey_version = "9.0.1"
@@ -131,7 +131,7 @@ def test_add_new_client_user_v0(cloud_spec):
         leader=True,
         relations={peer_relation, status_peer_relation, client_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with (
@@ -174,7 +174,7 @@ def test_add_new_client_user_v0(cloud_spec):
         assert secret_tls.latest_content.get("tls") == "false"
 
 
-def test_client_user_already_exists(cloud_spec):
+def test_client_user_already_exists():
     primary_endpoint = "valkey-0.valkey-endpoints"
     key_prefix = "test:*"
     request_id = "0cbbc9781f189ea5"
@@ -215,7 +215,7 @@ def test_client_user_already_exists(cloud_spec):
         relations={peer_relation, status_peer_relation, client_relation},
         secrets={managed_users_secret},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with (
@@ -240,7 +240,7 @@ def test_client_user_already_exists(cloud_spec):
         )
 
 
-def test_client_request_failed(cloud_spec):
+def test_client_request_failed():
     primary_endpoint = "valkey-0.valkey-endpoints"
     key_prefix = "test:*"
     request_id = "0cbbc9781f189ea5"
@@ -267,7 +267,7 @@ def test_client_request_failed(cloud_spec):
         leader=True,
         relations={peer_relation, status_peer_relation, client_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with (
@@ -282,7 +282,7 @@ def test_client_request_failed(cloud_spec):
         )
 
 
-def test_client_request_acl_load_failed(cloud_spec):
+def test_client_request_acl_load_failed():
     primary_endpoint = "valkey-0.valkey-endpoints"
     key_prefix = "test:*"
     request_id = "0cbbc9781f189ea5"
@@ -309,7 +309,7 @@ def test_client_request_acl_load_failed(cloud_spec):
         leader=True,
         relations={peer_relation, status_peer_relation, client_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with (
@@ -326,7 +326,7 @@ def test_client_request_acl_load_failed(cloud_spec):
         assert "bulk_resources_requested" in [e.name for e in state_out.deferred]
 
 
-def test_add_new_client_user_non_leader(cloud_spec):
+def test_add_new_client_user_non_leader():
     primary_endpoint = "valkey-0.valkey-endpoints"
     key_prefix = "test:*"
     request_id = "0cbbc9781f189ea5"
@@ -365,7 +365,7 @@ def test_add_new_client_user_non_leader(cloud_spec):
         relations={peer_relation, status_peer_relation, client_relation},
         secrets={managed_users_secret},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with (
@@ -386,7 +386,7 @@ def test_add_new_client_user_non_leader(cloud_spec):
         assert state_out.get_relation(1).local_unit_data.get("client-user-epoch") != 0
 
 
-def test_client_user_not_created_yet(cloud_spec):
+def test_client_user_not_created_yet():
     primary_endpoint = "valkey-0.valkey-endpoints"
     key_prefix = "test:*"
     request_id = "0cbbc9781f189ea5"
@@ -429,7 +429,7 @@ def test_client_user_not_created_yet(cloud_spec):
         relations={peer_relation, status_peer_relation, client_relation},
         secrets={managed_users_secret},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with (
@@ -447,7 +447,7 @@ def test_client_user_not_created_yet(cloud_spec):
         restart_sentinel.assert_not_called()
 
 
-def test_remove_client_user(cloud_spec):
+def test_remove_client_user():
     primary_endpoint = "valkey-0.valkey-endpoints"
     key_prefix = "test:*"
     request_id = "0cbbc9781f189ea5"
@@ -487,7 +487,7 @@ def test_remove_client_user(cloud_spec):
         relations={peer_relation, status_peer_relation, client_relation},
         secrets={managed_users_secret},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with (
@@ -514,7 +514,7 @@ def test_remove_client_user(cloud_spec):
         assert managed_users.get("relation-4-08154711")
 
 
-def test_relation_broken_non_leader(cloud_spec):
+def test_relation_broken_non_leader():
     primary_endpoint = "valkey-0.valkey-endpoints"
     key_prefix = "test:*"
     request_id = "0cbbc9781f189ea5"
@@ -553,7 +553,7 @@ def test_relation_broken_non_leader(cloud_spec):
         relations={peer_relation, status_peer_relation, client_relation},
         secrets={managed_users_secret},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with (
@@ -575,7 +575,7 @@ def test_relation_broken_non_leader(cloud_spec):
         restart_sentinel.assert_called_once()
 
 
-def test_certificate_transfer_version_set(cloud_spec):
+def test_certificate_transfer_version_set():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     certificate_transfer_relation = testing.Relation(
         id=5,
@@ -586,7 +586,7 @@ def test_certificate_transfer_version_set(cloud_spec):
         leader=True,
         relations={certificate_transfer_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     state_out = ctx.run(ctx.on.relation_created(relation=certificate_transfer_relation), state_in)
@@ -596,7 +596,7 @@ def test_certificate_transfer_version_set(cloud_spec):
     )
 
 
-def test_certificate_transfer_new_ca(cloud_spec):
+def test_certificate_transfer_new_ca():
     ca_cert = "client_ca_certificate"
 
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
@@ -617,7 +617,7 @@ def test_certificate_transfer_new_ca(cloud_spec):
         leader=False,
         relations={peer_relation, status_peer_relation, certificate_transfer_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with (
@@ -640,7 +640,7 @@ def test_certificate_transfer_new_ca(cloud_spec):
         restart_sentinel.assert_called_once()
 
 
-def test_certificate_transfer_no_ca_available(cloud_spec):
+def test_certificate_transfer_no_ca_available():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -655,7 +655,7 @@ def test_certificate_transfer_no_ca_available(cloud_spec):
         leader=False,
         relations={peer_relation, status_peer_relation, certificate_transfer_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with (
@@ -678,7 +678,7 @@ def test_certificate_transfer_no_ca_available(cloud_spec):
         restart_sentinel.assert_not_called()
 
 
-def test_certificate_transfer_ca_removed(cloud_spec):
+def test_certificate_transfer_ca_removed():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -693,7 +693,7 @@ def test_certificate_transfer_ca_removed(cloud_spec):
         leader=False,
         relations={peer_relation, status_peer_relation, certificate_transfer_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with (
@@ -715,7 +715,7 @@ def test_certificate_transfer_ca_removed(cloud_spec):
         restart_sentinel.assert_called_once()
 
 
-def test_certificate_transfer_ca_available_pebble_down_defers(cloud_spec):
+def test_certificate_transfer_ca_available_pebble_down_defers():
     ca_cert = "client_ca_certificate"
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
@@ -734,7 +734,7 @@ def test_certificate_transfer_ca_available_pebble_down_defers(cloud_spec):
         leader=False,
         relations={peer_relation, status_peer_relation, certificate_transfer_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
     with (
         patch(
@@ -752,7 +752,7 @@ def test_certificate_transfer_ca_available_pebble_down_defers(cloud_spec):
     assert "certificate_set_updated" in [e.name for e in state_out.deferred]
 
 
-def test_certificate_transfer_ca_removed_pebble_down_defers(cloud_spec):
+def test_certificate_transfer_ca_removed_pebble_down_defers():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -766,7 +766,7 @@ def test_certificate_transfer_ca_removed_pebble_down_defers(cloud_spec):
         leader=False,
         relations={peer_relation, status_peer_relation, certificate_transfer_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
     with patch(
         "core.base_workload.WorkloadBase.path_exists",

@@ -39,14 +39,14 @@ def test_vm_workload_exposes_log_and_archive_dirs():
 
 
 @pytest.mark.parametrize("storage_name", ["logs", "archive"])
-def test_storage_is_a_readable_writable_mount(cloud_spec, storage_name):
+def test_storage_is_a_readable_writable_mount(storage_name):
     """A file placed on the volume is visible to the charm and survives the hook."""
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     storage = testing.Storage(name=storage_name)
     (storage.get_filesystem(ctx) / "seed.txt").write_text("seeded")
 
     state_in = testing.State(
-        model=testing.Model(name="m", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="m", type="lxd"),
         leader=True,
         containers={testing.Container(name=CONTAINER, can_connect=True)},
         storages={storage},
@@ -64,11 +64,11 @@ def test_storage_is_a_readable_writable_mount(cloud_spec, storage_name):
     assert (storage.get_filesystem(ctx) / "written.txt").read_text() == "by-charm"
 
 
-def test_storage_attached_unknown_storage_logs_warning(cloud_spec, caplog):
+def test_storage_attached_unknown_storage_logs_warning(caplog):
     """An unrecognised storage name is logged and skipped, not silently dropped."""
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     state_in = testing.State(
-        model=testing.Model(name="m", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="m", type="lxd"),
         leader=True,
         containers={testing.Container(name=CONTAINER, can_connect=True)},
         relations=_base_relations(),
@@ -89,11 +89,11 @@ def test_storage_attached_unknown_storage_logs_warning(cloud_spec, caplog):
     assert any("bogus" in record.message for record in caplog.records)
 
 
-def test_storage_attached_logs_chmods_only_on_vm(cloud_spec_vm):
+def test_storage_attached_logs_chmods_only_on_vm(vm_environment):
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     logs = testing.Storage(name="logs")
     state_in = testing.State(
-        model=testing.Model(name="m", type="lxd", cloud_spec=cloud_spec_vm),
+        model=testing.Model(name="m", type="lxd"),
         leader=True,
         storages={logs},
         relations=_base_relations(),
