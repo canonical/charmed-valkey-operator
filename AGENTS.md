@@ -122,17 +122,20 @@ All paths below are under `src/`.
 - `managers/` — pure business logic, NO event handling; each takes (state, workload).
   `cluster.py`: health checks, replica sync, ACL reload. `config.py`: renders configs/ACL files,
   password generation, quorum math. `sentinel.py`: all Sentinel ops; on K8s also reconciles the
-  primary/replicas Services and pod `role` labels. `tls.py`, `external_clients.py`,
-  `topology.py` (observer subprocess lifecycle).
+  primary/replicas Services and pod `role` labels. `backup.py`: RDB backup/restore policy.
+  `tls.py`, `external_clients.py`, `topology.py` (observer subprocess lifecycle).
 - `events/` — ops.Objects that observe Juju events and ORCHESTRATE managers, no low-level logic.
   `base_events.py`: startup state machine + scale-down. `tls.py`, `external_clients.py`.
-- `workload_vm.py` — snap `charmed-valkey` (services `server`/`sentinel`, user `snap_daemon`,
-  CLI `charmed-valkey.cli`). `workload_k8s.py` — Pebble in the `valkey` container (services
-  valkey/valkey-sentinel/metric_exporter, user `_daemon_`, CLI `valkey-cli`; owns the Pebble layer).
+- `workload_vm.py` — snap `valkey-charmed` (services `server`/`sentinel`, user `snap_daemon`,
+  CLI `valkey-charmed.cli`). `workload_k8s.py` — Pebble in the `valkey` container (services
+  valkey/sentinel/metrics-exporter, user `_daemon_`, CLI `valkey-cli`; owns the Pebble layer).
   Workloads expose file/exec/service primitives only — business logic belongs in `managers/`, and
   paths/ports/users come from `literals.py`, never hardcoded.
-- `common/` — `client.py` (CliClient → ValkeyClient/SentinelClient), `locks.py`, `k8s_client.py`
-  (lightkube, K8s only), `custom_events.py`, `exceptions.py` (ALL custom exceptions).
+- `common/` — SDK/CLI adapters + shared plumbing: `client.py` (CliClient →
+  ValkeyClient/SentinelClient), `locks.py`, `k8s_client.py` (lightkube, K8s only),
+  `storage_backend.py` (object-store SDKs behind the `StorageBackend` Protocol; `build_backend`
+  is the credentials-type → backend registry), `custom_events.py`, `exceptions.py` (ALL custom
+  exceptions).
 - `literals.py` — ALL constants and enums (ports, paths, relation names, snap revisions,
   `Substrate`, `StartState`, `TLSState`, `CharmUsers`, `CHARM_USERS_ROLE_MAP`, …).
 - `statuses.py` — all `StatusObject`s, surfaced via data_platform_helpers' `StatusHandler` from
@@ -177,7 +180,7 @@ All paths below are under `src/`.
 
 | | VM | K8s |
 |---|---|---|
-| Workload | `charmed-valkey` snap (revisions pinned in `literals.py`) | OCI image + Pebble |
+| Workload | `valkey-charmed` snap (revisions pinned in `literals.py`) | OCI image + Pebble |
 | Unit address (`endpoint`) | private IP (`bind_address`) | unit hostname (`<unit>.<app>-endpoints`) |
 | Service discovery | Sentinel returns IPs | extra: lightkube-managed `*-primary`/`*-replicas` Services + pod `role` labels |
 | File paths / user | `var/snap/...`, `snap_daemon` | `var/lib/valkey/...`, `_daemon_` |

@@ -36,11 +36,6 @@ jobs:
         run: |
           pipx install tox
           pipx install poetry
-      # to build Valkey-glide during tests
-      - name: Install dependencies
-        run: |
-          sudo apt update
-          sudo apt install libprotobuf-dev protobuf-compiler
       - name: Run tests
         run: tox run -e unit
       - name: Upload Coverage to Codecov
@@ -57,11 +52,6 @@ jobs:
         run: |
           pipx install tox
           pipx install poetry
-      # to build Valkey-glide during tests (matches unit-test job)
-      - name: Install dependencies
-        run: |
-          sudo apt update
-          sudo apt install libprotobuf-dev protobuf-compiler
       - name: Run pyright
         run: tox run -e static
 

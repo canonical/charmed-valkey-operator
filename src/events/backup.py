@@ -2,7 +2,7 @@
 # Copyright 2026 Canonical Ltd.
 # See LICENSE file for licensing details.
 
-"""Juju event wiring for S3 backups."""
+"""Juju event wiring for object-storage backups."""
 
 from __future__ import annotations
 
@@ -12,8 +12,9 @@ import uuid
 from typing import TYPE_CHECKING
 
 import ops
-from botocore.exceptions import ClientError
 from object_storage import (
+    AzureStorageRequirer,
+    GCSRequirer,
     S3Requirer,
     StorageConnectionInfoChangedEvent,
     StorageConnectionInfoGoneEvent,
@@ -27,8 +28,11 @@ from common.exceptions import (
     ValkeyRestoreError,
     ValkeyWorkloadCommandError,
 )
-from core.models import S3Parameters
+from core.models import AzureStorageParameters, BackupCredentials, GCSParameters, S3Parameters
 from literals import (
+    AZURE_RELATION_NAME,
+    BACKUP_CREDENTIAL_FIELDS,
+    GCS_RELATION_NAME,
     PEER_RELATION,
     RESTORE_LOAD_TIMEOUT_S,
     RESTORE_RESYNC_TIMEOUT_S,
@@ -44,17 +48,15 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _safe_error(exc: ValkeyBackupError) -> str:
+def _safe_error(exc: ValkeyBackupError | ValkeyRestoreError) -> str:
     """Return an action-safe error string.
 
-    Action results are world-readable, so surface only the object-storage error
-    code (e.g. "AccessDenied"); the detail goes to the unit log.
+    Action results are world-readable, so surface only the structured error code
+    the failing operation attached (e.g. "AccessDenied"); the rest of the message
+    -- endpoint, container, request id -- goes to the unit log only.
     """
-    cause = exc.__cause__ or (exc.args[0] if exc.args else None)
-    if isinstance(cause, ClientError):
-        code = cause.response.get("Error", {}).get("Code", "")
-        if code:
-            return f"S3 request failed: {code}"
+    if exc.safe_code:
+        return f"Object storage request failed: {exc.safe_code}"
     return "Backup operation failed. See juju debug-log on this unit for details."
 
 
@@ -72,8 +74,36 @@ class BackupEvents(ops.Object):
         self.framework.observe(
             self.s3_requirer.on.storage_connection_info_gone, self._on_s3_credentials_gone
         )
-        # Recover credentials when leadership moves.
-        self.framework.observe(self.charm.on.leader_elected, self._on_s3_credentials_changed)
+        self.azure_requirer = AzureStorageRequirer(self.charm, AZURE_RELATION_NAME)
+        self.framework.observe(
+            self.azure_requirer.on.storage_connection_info_changed,
+            self._on_azure_credentials_changed,
+        )
+        self.framework.observe(
+            self.azure_requirer.on.storage_connection_info_gone,
+            self._on_azure_credentials_gone,
+        )
+        self.gcs_requirer = GCSRequirer(self.charm, GCS_RELATION_NAME)
+        self.framework.observe(
+            self.gcs_requirer.on.storage_connection_info_changed,
+            self._on_gcs_credentials_changed,
+        )
+        self.framework.observe(
+            self.gcs_requirer.on.storage_connection_info_gone,
+            self._on_gcs_credentials_gone,
+        )
+        # Every backend's changed path, keyed by its relation: used to re-drive the
+        # others when one integrator goes away and un-blocks them. Keys must cover
+        # BACKUP_CREDENTIAL_FIELDS or a registered backend never converges.
+        self._credentials_changed_handlers = {
+            S3_RELATION_NAME: self._on_s3_credentials_changed,
+            AZURE_RELATION_NAME: self._on_azure_credentials_changed,
+            GCS_RELATION_NAME: self._on_gcs_credentials_changed,
+        }
+        # Recover credentials when leadership moves; each handler early-returns if
+        # its requirer has no info, so firing them all on leader-elected is safe.
+        for handler in self._credentials_changed_handlers.values():
+            self.framework.observe(self.charm.on.leader_elected, handler)
         self.framework.observe(self.charm.on.create_backup_action, self._on_create_backup_action)
         self.framework.observe(self.charm.on.list_backups_action, self._on_list_backups_action)
         self.framework.observe(self.charm.on.restore_action, self._on_restore_action)
@@ -89,55 +119,99 @@ class BackupEvents(ops.Object):
 
     # ── event handlers ──────────────────────────────────────────────────
 
-    def _on_s3_credentials_changed(
-        self, event: StorageConnectionInfoChangedEvent | ops.LeaderElectedEvent
+    def _store_credentials(
+        self,
+        info: dict,
+        model_cls: type[BackupCredentials],
+        field: str,
+        event: StorageConnectionInfoChangedEvent
+        | StorageConnectionInfoGoneEvent
+        | ops.LeaderElectedEvent,
     ) -> None:
-        """Handle initial and updated S3 integrator credentials."""
-        if not (s3_info := self.s3_requirer.get_storage_connection_info()):
-            return
-        logger.info("S3 credentials changed; refreshing backup configuration")
+        """Validate ``info`` and store it as the app's backup credentials.
 
-        # Every unit needs the S3 CA on disk (store_tls_ca_chain tolerates partial info).
-        self.charm.backup_manager.store_tls_ca_chain(dict(s3_info))
+        The backend-neutral half of every credentials-changed handler: leader
+        gating, conflict refusal, validation, container setup and the databag
+        write. A backend's own handler fetches its payload, does whatever is
+        specific to it, and delegates here.
 
+        The peer-relation defer precedes the conflict guard so a leader still
+        wiring up its peer relation retries rather than short-circuiting.
+        """
         if not self.charm.unit.is_leader():
             return
         if not self.charm.state.peer_relation:
             event.defer()
             return
-
-        # S3Parameters trims/validates the payload and rejects missing/empty fields.
-        try:
-            params = S3Parameters.model_validate(dict(s3_info))
-        except ValidationError as e:
-            logger.warning("S3 integrator parameters invalid or incomplete: %s", e)
+        if self.charm.state.backup_backends_conflict:
+            logger.warning(
+                "More than one backup storage integrator related; refusing to store credentials"
+            )
             return
 
-        # leader_elected re-fires this; skip the create_bucket round trip if unchanged.
-        stored = self.charm.state.cluster.s3_credentials
+        # The model trims/validates the payload and rejects missing/empty fields.
+        try:
+            params = model_cls.model_validate(info)
+        except ValidationError as e:
+            logger.warning("Backup storage parameters invalid or incomplete: %s", e)
+            return
+
+        # leader_elected re-fires this; skip the ensure_container round trip if unchanged.
+        stored = getattr(self.charm.state.cluster, field)
         if stored is not None and stored.model_dump() == params.model_dump():
             return
 
-        # Don't swap the bucket/creds an in-flight backup or restore is using; the
+        # Don't swap the container/creds an in-flight backup or restore is using; any
         # CA is already stored and the current creds stay in the databag meanwhile.
         if self._backup_or_restore_in_progress():
-            logger.info("Backup or restore in progress; deferring S3 credentials rotation")
+            logger.info("Backup or restore in progress; deferring credentials rotation")
             event.defer()
             return
 
         try:
-            self.charm.backup_manager.create_bucket(params)
+            self.charm.backup_manager.ensure_container(params)
         except ValkeyBackupError as e:
-            logger.error("Bucket setup failed: %s", e)
+            logger.error("Container setup failed: %s", e)
             return
 
-        self.charm.state.cluster.update({"s3_credentials": params.model_dump_json(by_alias=True)})
+        self.charm.state.cluster.update({field: params.model_dump_json(by_alias=True)})
+
+    def _reconcile_other_backends(
+        self,
+        event: StorageConnectionInfoGoneEvent,
+        exclude: str,
+    ) -> None:
+        """Re-drive every backend's changed path except ``exclude``'s.
+
+        Removing one integrator clears any conflict, so a still-related backend
+        can now store its credentials; without this it would stay unconfigured
+        until some unrelated event re-fired its handler. Each handler no-ops when
+        its own relation is absent.
+        """
+        for relation_name, handler in self._credentials_changed_handlers.items():
+            if relation_name != exclude:
+                handler(event)
+
+    def _on_s3_credentials_changed(
+        self,
+        event: StorageConnectionInfoChangedEvent
+        | StorageConnectionInfoGoneEvent
+        | ops.LeaderElectedEvent,
+    ) -> None:
+        """Handle initial and updated S3 integrator credentials."""
+        if not (s3_info := self.s3_requirer.get_storage_connection_info()):
+            return
+        logger.info("S3 credentials changed; refreshing backup configuration")
+        # The endpoint CA is S3-only and every unit needs it on disk, so it is
+        # stored before the leader gating in _store_credentials.
+        self.charm.backup_manager.store_tls_ca_chain(dict(s3_info))
+        self._store_credentials(dict(s3_info), S3Parameters, "s3_credentials", event)
 
     def _backup_or_restore_in_progress(self) -> bool:
         """Return whether a backup (on any unit) or a restore is running.
 
         Cluster-wide: a backup runs on any single unit, so the leader must not
-        clobber the shared S3 credentials from under it.
+        clobber the shared backup credentials from under it.
         """
         return (
             self.charm.state.is_backup_in_progress_any
@@ -156,8 +230,61 @@ class BackupEvents(ops.Object):
         if self.charm.unit.is_leader():
             self.charm.state.cluster.update({"s3_credentials": ""})
 
+        self._reconcile_other_backends(event, exclude=S3_RELATION_NAME)
+
+    def _on_azure_credentials_changed(
+        self,
+        event: StorageConnectionInfoChangedEvent
+        | StorageConnectionInfoGoneEvent
+        | ops.LeaderElectedEvent,
+    ) -> None:
+        """Handle initial and updated Azure Storage integrator credentials."""
+        if not (az_info := self.azure_requirer.get_storage_connection_info()):
+            return
+        logger.info("Azure credentials changed; refreshing backup configuration")
+        self._store_credentials(dict(az_info), AzureStorageParameters, "azure_credentials", event)
+
+    def _on_azure_credentials_gone(self, event: StorageConnectionInfoGoneEvent) -> None:
+        """Handle removal of the Azure Storage credentials relation."""
+        if self._backup_or_restore_in_progress():
+            logger.warning("Backup or restore in progress; deferring credentials_gone")
+            event.defer()
+            return
+
+        # The endpoint CA is an S3-only concept (azure_storage carries no CA
+        # field), so there is nothing on disk to remove here.
+        if self.charm.unit.is_leader():
+            self.charm.state.cluster.update({"azure_credentials": ""})
+
+        self._reconcile_other_backends(event, exclude=AZURE_RELATION_NAME)
+
+    def _on_gcs_credentials_changed(
+        self,
+        event: StorageConnectionInfoChangedEvent
+        | StorageConnectionInfoGoneEvent
+        | ops.LeaderElectedEvent,
+    ) -> None:
+        """Handle initial and updated GCS integrator credentials."""
+        if not (gcs_info := self.gcs_requirer.get_storage_connection_info()):
+            return
+        logger.info("GCS credentials changed; refreshing backup configuration")
+        self._store_credentials(dict(gcs_info), GCSParameters, "gcs_credentials", event)
+
+    def _on_gcs_credentials_gone(self, event: StorageConnectionInfoGoneEvent) -> None:
+        """Handle removal of the GCS credentials relation."""
+        if self._backup_or_restore_in_progress():
+            logger.warning("Backup or restore in progress; deferring credentials_gone")
+            event.defer()
+            return
+
+        # No CA on disk for GCS, unlike S3.
+        if self.charm.unit.is_leader():
+            self.charm.state.cluster.update({"gcs_credentials": ""})
+
+        self._reconcile_other_backends(event, exclude=GCS_RELATION_NAME)
+
     def _on_create_backup_action(self, event: ops.ActionEvent) -> None:
-        """Run a streaming RDB backup of this unit's Valkey instance to S3."""
+        """Run a streaming RDB backup of this unit's Valkey instance to object storage."""
         if reason := self._blocking_reason():
             event.set_results({"error": reason})
             event.fail(reason)
@@ -167,7 +294,7 @@ class BackupEvents(ops.Object):
             "audit: create-backup action invoked action_id=%s",
             event.id,
         )
-        event.log("Streaming backup to S3 ...")
+        event.log("Streaming backup to object storage ...")
         # Surface the running backup in juju status; is_action beats lower-priority statuses.
         self.charm.status.set_running_status(
             BackupStatuses.BACKUP_IN_PROGRESS.value,
@@ -192,7 +319,7 @@ class BackupEvents(ops.Object):
         event.set_results({"backup-id": backup_id})
 
     def _on_list_backups_action(self, event: ops.ActionEvent) -> None:
-        """List backups currently in S3, newest first."""
+        """List backups currently in object storage, newest first."""
         if (output_format := event.params.get("output", "table").lower()) not in {"json", "table"}:
             event.fail("Failed: invalid output format, must be either 'json' or 'table'.")
             return
@@ -220,16 +347,31 @@ class BackupEvents(ops.Object):
 
     # ── guard ────────────────────────────────────────────────────────────
 
+    def _backup_storage_reason(self) -> str | None:
+        """Return why no usable backup storage is configured, or None if it is.
+
+        Shared by the backup and restore guards, and generated from the backend
+        registry so a new backend needs no edit here.
+        """
+        if self.charm.state.backup_backends_conflict:
+            return "More than one backup storage integrator is related; relate exactly one."
+        if not self.charm.state.backup_relations:
+            return (
+                "No backup storage relation. Integrate a storage integrator on one of: "
+                f"{', '.join(BACKUP_CREDENTIAL_FIELDS)}."
+            )
+        if not self.charm.state.active_backup_credentials:
+            return "Backup storage credentials unavailable. Check the integrator config."
+        return None
+
     def _blocking_reason(self, check_running_operations: bool = True) -> str | None:
         """Return why a backup action cannot run, or None if it can.
 
         Shared by create-backup and list-backups; the latter passes
         ``check_running_operations=False`` since it is read-only.
         """
-        if not self.charm.state.s3_relation:
-            return "No S3 relation. Integrate with s3-integrator first."
-        if not self.charm.state.cluster.s3_credentials:
-            return "S3 credentials unavailable. Check s3-integrator config."
+        if reason := self._backup_storage_reason():
+            return reason
         if not self.charm.workload.alive():
             return "Valkey is not running on this unit."
         if check_running_operations and self.charm.state.unit_server.is_backup_in_progress:
@@ -242,10 +384,8 @@ class BackupEvents(ops.Object):
         """Return why a restore of ``backup_id`` cannot start, or None if it can."""
         if not self.charm.unit.is_leader():
             return "Restore must be run on the leader unit."
-        if not self.charm.state.s3_relation:
-            return "No S3 relation. Integrate with s3-integrator first."
-        if not self.charm.state.cluster.s3_credentials:
-            return "S3 credentials unavailable. Check s3-integrator config."
+        if reason := self._backup_storage_reason():
+            return reason
         if self.charm.state.is_backup_in_progress_any:
             return "A backup is in progress; cannot restore."
         if self.charm.state.cluster.is_restore_in_progress:
@@ -258,7 +398,7 @@ class BackupEvents(ops.Object):
             return "Not all units are active; wait for the cluster to settle."
         if reason := self._unstable_primary_reason():
             return reason
-        # Last, since it is the only gate that costs an S3 round-trip.
+        # Last, since it is the only gate that costs an object-storage round-trip.
         return self._unusable_backup_reason(backup_id)
 
     def _unusable_backup_reason(self, backup_id: str) -> str | None:

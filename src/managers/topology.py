@@ -17,6 +17,7 @@ from literals import (
     SENTINEL_PORT,
     SENTINEL_TLS_PORT,
     TOPOLOGY_OBSERVER_LOG_FILENAME,
+    TOPOLOGY_OBSERVER_PID_FILENAME,
     TOPOLOGY_OBSERVER_TLS_CA_FILENAME,
     CharmUsers,
 )
@@ -44,9 +45,14 @@ class TopologyManager:
         """Return the path to the topology observer TLS CA file."""
         return self.state.charm.charm_dir / TOPOLOGY_OBSERVER_TLS_CA_FILENAME
 
+    @property
+    def _pid_file_path(self) -> Path:
+        """Return the path to the topology observer pid file."""
+        return self.state.charm.charm_dir / TOPOLOGY_OBSERVER_PID_FILENAME
+
     def start_observer(self) -> None:
         """Start the topology observer as a subprocess."""
-        if (observer_pid := self.state.unit_server.model.topology_observer_pid) != 0:
+        if (observer_pid := self._read_observer_pid()) != 0:
             try:
                 # check if the process already runs
                 os.kill(int(observer_pid), 0)
@@ -106,12 +112,12 @@ class TopologyManager:
             env=env,
         ).pid
 
-        self.state.unit_server.update({"topology_observer_pid": pid})
+        self._pid_file_path.write_text(str(pid))
         logging.info(f"Started topology observer process with PID {pid}")
 
     def stop_observer(self) -> None:
         """Stop the topology observer."""
-        if (observer_pid := self.state.unit_server.model.topology_observer_pid) == 0:
+        if (observer_pid := self._read_observer_pid()) == 0:
             logger.debug("Topology observer already stopped")
             return
 
@@ -122,9 +128,16 @@ class TopologyManager:
         except OSError:
             pass
         finally:
-            self.state.unit_server.update({"topology_observer_pid": ""})
+            self._pid_file_path.unlink()
 
     def restart_observer(self) -> None:
         """Stop and start the topology observer to pickup host changes."""
         self.stop_observer()
         self.start_observer()
+
+    def _read_observer_pid(self) -> int:
+        """Read the pid file of the topology observer and return the pid, or 0 if none."""
+        try:
+            return int(self._pid_file_path.read_text())
+        except (FileNotFoundError, PermissionError):
+            return 0

@@ -11,7 +11,10 @@ import ops
 
 from common.custom_events import UnitFullyStartedEvent
 from common.exceptions import (
+    CannotSeeAllActiveSentinelsError,
+    NotAllDepartingSentinelsStoppedError,
     RequestingLockTimedOutError,
+    SentinelIncorrectReplicaCountError,
     ValkeyACLLoadError,
     ValkeyBackupInProgressError,
     ValkeyCannotGetPrimaryIPError,
@@ -255,7 +258,7 @@ class BaseEvents(ops.Object):
         except (ValkeyWorkloadCommandError, ValueError) as e:
             logger.error("Failed to start topology observer: %s", e)
 
-    def _on_peer_relation_changed(self, _: ops.RelationChangedEvent) -> None:
+    def _on_peer_relation_changed(self, event: ops.RelationChangedEvent) -> None:
         """Handle event received by all units when a unit's relation data changes."""
         if self.charm.state.cluster.is_restore_in_progress:
             return
@@ -277,6 +280,19 @@ class BaseEvents(ops.Object):
             lock.process()
 
         if not self.charm.state.unit_server.is_active:
+            return
+
+        try:
+            self.charm.sentinel_manager.remove_departed_sentinels_from_cluster()
+        except (
+            CannotSeeAllActiveSentinelsError,
+            NotAllDepartingSentinelsStoppedError,
+            SentinelIncorrectReplicaCountError,
+            ValkeyCannotGetPrimaryIPError,
+            ValkeyWorkloadCommandError,
+        ) as e:
+            logger.error(e)
+            event.defer()
             return
 
         # return early during TLS switchover to avoid unnecessary operation during rolling restart for sentinel
@@ -309,7 +325,13 @@ class BaseEvents(ops.Object):
         if self.charm.state.unit_server.is_started:
             self.charm.cluster_manager.reconcile_min_replicas_to_write()
 
-        if not self.charm.unit.is_leader() or not self.charm.state.unit_server.is_active:
+        if not self.charm.unit.is_leader():
+            return
+
+        # trigger Sentinel reset and health check, executed on relation-changed
+        self.charm.state.cluster.update({"sentinel_reset_required": True})
+
+        if not self.charm.state.unit_server.is_active:
             return
 
         try:
@@ -354,6 +376,19 @@ class BaseEvents(ops.Object):
             return
 
         if self.charm.state.unit_server.is_active:
+            try:
+                self.charm.sentinel_manager.remove_departed_sentinels_from_cluster()
+            except (
+                CannotSeeAllActiveSentinelsError,
+                NotAllDepartingSentinelsStoppedError,
+                SentinelIncorrectReplicaCountError,
+                ValkeyCannotGetPrimaryIPError,
+                ValkeyWorkloadCommandError,
+            ) as e:
+                logger.error(e)
+                event.defer()
+                return
+
             try:
                 self.charm.topology_manager.start_observer()
             except (ValkeyWorkloadCommandError, ValueError) as e:
@@ -654,7 +689,6 @@ class BaseEvents(ops.Object):
             scope="unit",
             component=self.charm.cluster_manager.name,
         )
-        # TODO consider quorum when removing unit
 
         self.charm.status.set_running_status(
             ScaleDownStatuses.SCALING_DOWN.value,
@@ -662,6 +696,7 @@ class BaseEvents(ops.Object):
             component_name=self.charm.cluster_manager.name,
             statuses_state=self.charm.state.statuses,
         )
+
         # if unit has primary then failover
         try:
             primary_ip = self.charm.sentinel_manager.get_primary_ip_for_scale_down()
@@ -691,9 +726,8 @@ class BaseEvents(ops.Object):
             logger.info("Waiting for replica to be fully-synced before saving the dataset")
             self.charm.cluster_manager.wait_for_replica_fully_synced(primary_ip)
 
+        # stop valkey
         self.charm.cluster_manager.save_dataset_before_shutdown()
-
-        # stop valkey and sentinel processes
         try:
             self.charm.workload.stop()
         except ValkeyServicesCouldNotBeStoppedError as e:
@@ -701,21 +735,10 @@ class BaseEvents(ops.Object):
 
         self.charm.state.unit_server.update({"start_state": StartState.NOT_STARTED.value})
 
-        # reset sentinel states on other units
-        active_sentinels = [
-            ip
-            for ip in active_sentinels
-            if ip != self.charm.state.unit_server.get_endpoint(self.charm.state.substrate)
-        ]
-
-        if active_sentinels:
-            logger.debug("Resetting sentinel states on active units: %s", active_sentinels)
-            self.charm.sentinel_manager.reset_sentinel_states(active_sentinels)
-
-            # check health after scale down
-            self.charm.sentinel_manager.verify_expected_replica_count(active_sentinels)
-            # release lock
+        try:
             scale_down_lock.release_lock(primary_ip=primary_ip)
+        except ValkeyWorkloadCommandError:
+            logger.warning("Failed to release scale-down lock, will be released when TTL expires")
 
         self._set_state_for_going_away()
 

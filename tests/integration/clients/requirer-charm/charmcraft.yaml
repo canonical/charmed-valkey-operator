@@ -55,8 +55,6 @@ parts:
       - libffi-dev # Needed to build Python dependencies with Rust from source
       - libssl-dev # Needed to build Python dependencies with Rust from source
       - pkg-config # Needed to build Python dependencies with Rust from source
-      - libprotobuf-dev # Needed to build Valkey-glide
-      - protobuf-compiler # Needed to build Valkey-glide
       - git
     build-environment:
       - PIP_BUILD_CONSTRAINT: constraints.txt # Workaround setuptools 82

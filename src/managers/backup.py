@@ -2,7 +2,7 @@
 # Copyright 2026 Canonical Ltd.
 # See LICENSE file for licensing details.
 
-"""Manager for S3 backups of Valkey RDB snapshots."""
+"""Manager for backups of Valkey RDB snapshots to remote object storage."""
 
 from __future__ import annotations
 
@@ -10,21 +10,20 @@ import logging
 import pathlib
 import re
 from datetime import datetime, timezone
-from typing import IO, TYPE_CHECKING, Any, BinaryIO, cast
+from functools import cached_property
+from typing import IO, TYPE_CHECKING, Any, cast
 
-import boto3
-from boto3.s3.transfer import TransferConfig
-from botocore.config import Config
-from botocore.exceptions import ClientError
 from charmlibs import pathops
 from data_platform_helpers.advanced_statuses.models import StatusObject
 from data_platform_helpers.advanced_statuses.protocol import ManagerStatusProtocol
 from data_platform_helpers.advanced_statuses.types import Scope
 
 from common.client import ValkeyClient
-from common.exceptions import ValkeyBackupError, ValkeyRestoreError
+from common.exceptions import StorageBackendError, ValkeyBackupError, ValkeyRestoreError
+from common.storage_backend import StorageBackend, build_backend
 from literals import (
     BACKUP_CA_FILENAME,
+    BACKUP_EXISTS_CODE,
     BACKUP_ID_FORMAT,
     PRE_RESTORE_SUFFIX,
     CharmUsers,
@@ -33,12 +32,9 @@ from literals import (
 from statuses import BackupStatuses, CharmStatuses, RestoreStatuses
 
 if TYPE_CHECKING:
-    from mypy_boto3_s3.literals import BucketLocationConstraintType
-    from mypy_boto3_s3.service_resource import Bucket, S3ServiceResource
-
     from core.base_workload import WorkloadBase
     from core.cluster_state import ClusterState
-    from core.models import S3Parameters
+    from core.models import BackupCredentials
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +54,7 @@ _PEM_HEADER_RE = re.compile(r"-+BEGIN [A-Z ]+-+")
 class _CountingReader:
     """Wrap a binary stream, counting bytes read and capturing the head.
 
-    boto3's ``upload_fileobj`` reads through this, letting ``create_backup``
+    The backend's ``upload`` reads through this, letting ``create_backup``
     assert post-upload that the stream was non-empty and started with a
     valid RDB magic header.
     """
@@ -121,68 +117,35 @@ class BackupManager(ManagerStatusProtocol):
         """
         return self.workload.archive_dir / ("dump.rdb" + PRE_RESTORE_SUFFIX)
 
-    # ── boto3 client construction ────────────────────────────────────────
+    # ── backend selection ────────────────────────────────────────────────
 
-    def _get_bucket_resource(self, s3_parameters: "S3Parameters") -> "Bucket":
-        """Build a boto3 Bucket resource configured per the s3-integrator envelope."""
-        verify: bool | str = True
-        if s3_parameters.tls_ca_chain:
-            verify = self._backup_ca_path.as_posix()
+    @cached_property
+    def storage_backend(self) -> StorageBackend:
+        """The backend serving the app's active backup credentials.
 
-        # Scope creds to a Session so they don't surface in boto3 traceback repr(args).
-        session = boto3.Session(
-            aws_access_key_id=s3_parameters.access_key,
-            aws_secret_access_key=s3_parameters.secret_key,
-            region_name=s3_parameters.region,
-        )
-        s3 = cast(
-            "S3ServiceResource",
-            session.resource(
-                "s3",
-                endpoint_url=s3_parameters.endpoint,
-                config=Config(
-                    request_checksum_calculation="when_required",
-                    response_checksum_validation="when_required",
-                ),
-                verify=verify,
-            ),
-        )
-        return s3.Bucket(s3_parameters.bucket)
+        Cached because a manager instance lives for exactly one hook: every
+        operation in that hook shares one backend object. Raises
+        ``StorageBackendError`` when no integrator has supplied credentials yet,
+        which each caller translates into its own backup/restore error.
+        """
+        params = self.state.active_backup_credentials
+        if params is None:
+            raise StorageBackendError("Backup storage credentials unavailable")
+        return build_backend(params, self._backup_ca_path)
 
-    # ── bucket lifecycle ────────────────────────────────────────────────
+    # ── container lifecycle ──────────────────────────────────────────────
 
-    def create_bucket(self, s3_parameters: "S3Parameters") -> None:
-        """Create the configured bucket; idempotent across S3 implementations."""
-        bucket = self._get_bucket_resource(s3_parameters)
-        region = s3_parameters.region
+    def ensure_container(self, params: "BackupCredentials") -> None:
+        """Idempotently create the bucket/container for just-validated params.
+
+        Builds its own backend instead of using ``storage_backend``: this runs
+        before the credentials are written to the databag, so ``state`` cannot
+        supply them yet.
+        """
         try:
-            # us-east-1 must NOT be sent as a LocationConstraint (CreateBucket
-            # rejects it); any other region is passed explicitly. See aws-sdk-js#3647.
-            if region and region != "us-east-1":
-                bucket.create(
-                    CreateBucketConfiguration={
-                        # stub wants a region Literal; any non-default region is valid.
-                        "LocationConstraint": cast("BucketLocationConstraintType", region)
-                    }
-                )
-            else:
-                bucket.create()
-            # Bound the wait (boto3 default is up to 100s) so a slow endpoint can't
-            # block leader_elected. The stub doesn't model WaiterConfig here.
-            bucket.wait_until_exists(
-                WaiterConfig={"Delay": 1, "MaxAttempts": 5}  # pyright: ignore[reportCallIssue]
-            )
-        except ClientError as e:
-            # Match the structured code, not the message (alt-S3 backends recase it).
-            code = e.response.get("Error", {}).get("Code", "")
-            if code in {
-                "BucketAlreadyOwnedByYou",
-                "BucketAlreadyExists",
-                "BucketNameUnavailable",
-            }:
-                logger.info("Using existing bucket %s", s3_parameters.bucket)
-                return
-            raise ValkeyBackupError(e) from e
+            build_backend(params, self._backup_ca_path).ensure_container()
+        except StorageBackendError as e:
+            raise ValkeyBackupError(str(e), safe_code=e.safe_code) from e
 
     # ── TLS CA chain ─────────────────────────────────────────────────────
 
@@ -208,17 +171,11 @@ class BackupManager(ManagerStatusProtocol):
     # ── list ────────────────────────────────────────────────────────────
 
     def list_backups(self) -> list[str]:
-        """Return valid backup ids in the configured bucket, newest first (auto-paginated)."""
-        s3_parameters = self.state.cluster.s3_credentials
-        if s3_parameters is None:
-            raise ValkeyBackupError("S3 credentials unavailable")
-        path = s3_parameters.path
-        bucket = self._get_bucket_resource(s3_parameters)
+        """Return valid backup ids in the configured container, newest first."""
         try:
-            keys = [obj.key for obj in bucket.objects.filter(Prefix=f"{path}/")]
-        except ClientError as e:
-            raise ValkeyBackupError(e) from e
-        ids = [k.removeprefix(f"{path}/") for k in keys]
+            ids = self.storage_backend.list_object_ids()
+        except StorageBackendError as e:
+            raise ValkeyBackupError(str(e), safe_code=e.safe_code) from e
         ids = [bid for bid in ids if _BACKUP_ID_RE.match(bid)]
         ids.sort(reverse=True)
         return ids
@@ -237,29 +194,36 @@ class BackupManager(ManagerStatusProtocol):
     # ── create ──────────────────────────────────────────────────────────
 
     def create_backup(self) -> str:
-        """Stream a fresh RDB from the local Valkey instance to S3.
+        """Stream a fresh RDB from the local Valkey instance to backup storage.
 
         Sets a per-unit lock on the running unit's databag, streams
-        ``valkey-cli --rdb -`` stdout into ``bucket.upload_fileobj``,
-        and cleans up the S3 object on failure.
+        ``valkey-cli --rdb -`` stdout into the backend's ``upload``,
+        and cleans up the stored object on failure.
         """
-        s3_parameters = self.state.cluster.s3_credentials
-        if s3_parameters is None:
-            raise ValkeyBackupError("S3 credentials unavailable")
+        try:
+            backend = self.storage_backend
+        except StorageBackendError as e:
+            raise ValkeyBackupError(str(e), safe_code=e.safe_code) from e
         started = datetime.now(timezone.utc)
         backup_id = started.strftime(BACKUP_ID_FORMAT)
-        key = f"{s3_parameters.path}/{backup_id}"
-        # Structured audit trail for forensics; endpoint logged, creds never.
-        logger.info(
-            "backup.started backup_id=%s unit=%s bucket=%s endpoint=%s",
-            backup_id,
-            self.state.unit_server.unit_name,
-            s3_parameters.bucket,
-            s3_parameters.endpoint,
-        )
+        # A stored backup is never replaced. Azure refuses the write itself
+        # (upload_blob overwrite=False), but boto3's managed uploader takes no
+        # If-None-Match, so the guard both backends share has to live here.
+        try:
+            stored = backend.list_object_ids()
+        except StorageBackendError as e:
+            raise ValkeyBackupError(str(e), safe_code=e.safe_code) from e
+        if backup_id in stored:
+            logger.warning("backup.rejected backup_id=%s reason=already-exists", backup_id)
+            raise ValkeyBackupError(
+                f"An object already exists for backup-id {backup_id}",
+                safe_code=BACKUP_EXISTS_CODE,
+            )
+        # Structured audit trail for forensics; destination logged, creds never.
+        # No unit= -- Juju already prefixes every log line with the emitting unit.
+        logger.info("backup.started backup_id=%s destination=%s", backup_id, backend.location)
 
         self.state.unit_server.update({"backup_id": backup_id})
-        bucket = self._get_bucket_resource(s3_parameters)
         # Pass the admin password via VALKEYCLI_AUTH, never on argv (world-visible).
         proc = self.workload.exec_stream(
             self._build_rdb_command(),
@@ -268,12 +232,8 @@ class BackupManager(ManagerStatusProtocol):
         reader = _CountingReader(proc.stdout)
 
         try:
-            # Don't retry the whole upload: reader can't rewind (boto3 retries parts).
-            bucket.upload_fileobj(
-                cast("IO[bytes]", reader),
-                key,
-                Config=TransferConfig(multipart_chunksize=8 * 1024 * 1024),
-            )
+            # Don't retry the whole upload: reader can't rewind (the SDK retries parts).
+            backend.upload(backup_id, cast("IO[bytes]", reader))
             rc, stderr = proc.wait()
             if rc != 0:
                 raise ValkeyBackupError(f"valkey-cli --rdb exited {rc}: {stderr}")
@@ -284,16 +244,23 @@ class BackupManager(ManagerStatusProtocol):
                     f"({reader.bytes_read} bytes); refusing to record this backup"
                 )
         except ValkeyBackupError:
-            # A complete-but-invalid object is in the bucket; delete it. (A
-            # mid-stream ClientError is handled below, after boto3 aborts.)
-            self._delete_object_best_effort(bucket, key)
+            # A complete-but-invalid object is stored; delete it. (A mid-stream
+            # backend error is handled below, after the SDK aborts its transfer.)
+            backend.delete(backup_id)
             logger.warning("backup.failed backup_id=%s", backup_id)
             raise
-        except ClientError as e:
-            # boto3 aborts the multipart upload itself; just stop the producer.
+        except StorageBackendError as e:
+            # The SDK aborts its own managed transfer; just stop the producer.
             proc.kill()
             logger.warning("backup.failed backup_id=%s", backup_id)
-            raise ValkeyBackupError(e) from e
+            raise ValkeyBackupError(str(e), safe_code=e.safe_code) from e
+        except Exception:
+            # Nothing should get past the backends' translation, but an SDK that
+            # grows a new exception type must not leave valkey-cli blocked on a
+            # pipe nobody drains. The producer dies with the backup either way.
+            proc.kill()
+            logger.warning("backup.failed backup_id=%s", backup_id)
+            raise
         else:
             elapsed = (datetime.now(timezone.utc) - started).total_seconds()
             logger.info(
@@ -310,54 +277,40 @@ class BackupManager(ManagerStatusProtocol):
     # ── restore ─────────────────────────────────────────────────────────
 
     def verify_backup_is_rdb(self, backup_id: str) -> None:
-        """Cheaply confirm the S3 object is an RDB before touching valkey.
+        """Cheaply confirm the stored object is an RDB before touching valkey.
 
-        A ranged GET of the first 16 bytes (not a full download), so a missing or
+        A ranged read of the first 16 bytes (not a full download), so a missing or
         non-RDB backup-id fails while valkey is still serving.
         """
-        s3_parameters = self.state.cluster.s3_credentials
-        if s3_parameters is None:
-            raise ValkeyRestoreError("S3 credentials unavailable")
-        bucket = self._get_bucket_resource(s3_parameters)
         try:
-            head = (
-                bucket.Object(f"{s3_parameters.path}/{backup_id}")
-                .get(Range="bytes=0-15")["Body"]
-                .read()
-            )
-        except ClientError as e:
-            raise ValkeyRestoreError(e) from e
+            head = self.storage_backend.head(backup_id)
+        except StorageBackendError as e:
+            raise ValkeyRestoreError(str(e), safe_code=e.safe_code) from e
         if not head.startswith(_RDB_MAGIC):
             raise ValkeyRestoreError(f"Object for {backup_id} is not a valid RDB stream")
         logger.info("restore.verified backup_id=%s (RDB header ok)", backup_id)
 
     def download_backup(self, backup_id: str) -> None:
-        """Stream the full RDB from S3 onto the data partition as ``dump.rdb``.
+        """Stream the full RDB from backup storage onto the data partition.
 
         push_data_file copies in bounded chunks (never buffering the whole object
         in the charm container) to ``dump.rdb.part``, then an atomic same-partition
         rename onto ``dump.rdb`` so it never appears partial.
         """
-        s3_parameters = self.state.cluster.s3_credentials
-        if s3_parameters is None:
-            raise ValkeyRestoreError("S3 credentials unavailable")
-        bucket = self._get_bucket_resource(s3_parameters)
-
         try:
-            obj = bucket.Object(f"{s3_parameters.path}/{backup_id}").get()
-        except ClientError as e:
-            raise ValkeyRestoreError(e) from e
+            obj = self.storage_backend.download(backup_id)
+        except StorageBackendError as e:
+            raise ValkeyRestoreError(str(e), safe_code=e.safe_code) from e
 
         logger.info(
             "restore.download.started backup_id=%s bytes=%s -> %s",
             backup_id,
-            obj.get("ContentLength"),
+            obj.size,
             self._dump_tmp_path,
         )
-        # Stream S3 -> data partition; the StreamingBody is a binary read()-able
-        # at runtime (cast for the stub), copied in bounded chunks by the workload.
+        # Stream the backend's body -> data partition, in bounded chunks.
         self.workload.push_data_file(
-            cast(BinaryIO, obj["Body"]),
+            obj.body,
             self._dump_tmp_path,
             user=self.workload.user,
             group=self.workload.user,
@@ -451,14 +404,6 @@ class BackupManager(ManagerStatusProtocol):
         prefix = client.build_command_prefix(json_output=False, hostname=self.state.endpoint)
         return prefix + ["--rdb", "-"]
 
-    @staticmethod
-    def _delete_object_best_effort(bucket: "Bucket", key: str) -> None:
-        """Delete an S3 object, swallowing any error (best-effort cleanup)."""
-        try:
-            bucket.Object(key).delete()
-        except Exception as e:
-            logger.warning("Failed to delete partial S3 object %s: %s", key, e)
-
     # ── advanced statuses ───────────────────────────────────────────────
 
     def get_statuses(self, scope: Scope, recompute: bool = False) -> list[StatusObject]:
@@ -472,18 +417,22 @@ class BackupManager(ManagerStatusProtocol):
             ).root
         )
 
-        if scope == "unit" and self.state.unit_server.is_backup_in_progress:
-            status_list.append(BackupStatuses.BACKUP_IN_PROGRESS.value)
+        if scope == "unit":
+            if self.state.unit_server.is_backup_in_progress:
+                status_list.append(BackupStatuses.BACKUP_IN_PROGRESS.value)
+            return status_list or [CharmStatuses.ACTIVE_IDLE.value]
 
-        if (
-            scope == "app"
-            and self.state.unit_server.is_started
-            and self.state.s3_relation
-            and not self.state.cluster.s3_credentials
+        if self.state.backup_backends_conflict:
+            # Nothing can pick a backend, so this beats the credentials status.
+            status_list.append(BackupStatuses.BACKUP_BACKENDS_CONFLICT.value)
+        elif (
+            self.state.unit_server.is_started
+            and self.state.backup_relations
+            and not self.state.active_backup_credentials
         ):
-            status_list.append(BackupStatuses.BACKUP_S3_PARAMETERS_MISSING.value)
+            status_list.append(BackupStatuses.BACKUP_CREDENTIALS_MISSING.value)
 
-        if scope == "app" and self.state.cluster.is_restore_in_progress:
+        if self.state.cluster.is_restore_in_progress:
             status_list.append(RestoreStatuses.RESTORE_IN_PROGRESS.value)
 
         return status_list or [CharmStatuses.ACTIVE_IDLE.value]

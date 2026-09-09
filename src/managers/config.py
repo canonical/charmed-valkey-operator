@@ -119,6 +119,9 @@ class ConfigManager(ManagerStatusProtocol):
         ldap_config = self.generate_ldap_config()
         config_properties.update(ldap_config)
 
+        # Client-side caching: limit memory consumption for key-invalidation table
+        config_properties["tracking-table-max-keys"] = "1000000"
+
         return config_properties
 
     def _generate_replica_config(self, primary_endpoint: str) -> dict[str, str]:

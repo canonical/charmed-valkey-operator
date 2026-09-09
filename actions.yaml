@@ -14,13 +14,13 @@ sync-ldap-users:
 
 create-backup:
   description: |
-    Stream a fresh RDB backup of this unit's Valkey instance to S3.
+    Stream a fresh RDB backup of this unit's Valkey instance to the related backup storage.
     Runs on the targeted unit (any unit, leader or follower).
-    S3 credentials are taken from the related s3-integrator charm.
+    Credentials are taken from the related storage integrator charm.
 
 list-backups:
   description: |
-    List all backup objects in the configured S3 bucket, newest first.
+    List all backup objects in the configured backup storage, newest first.
     Safe to run while another backup is uploading.
   params:
     output:
@@ -30,9 +30,10 @@ list-backups:
 
 restore:
   description: |
-    Restore the cluster's dataset from a backup in S3. Replaces the data on all units.
+    Restore the cluster's dataset from a backup in the related backup storage.
+    Replaces the data on all units.
     Run on the leader unit. The backup-id must be one returned by list-backups.
-    S3 credentials are taken from the related s3-integrator charm.
+    Credentials are taken from the related storage integrator charm.
   params:
     backup-id:
       type: string

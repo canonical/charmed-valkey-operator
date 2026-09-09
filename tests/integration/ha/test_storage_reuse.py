@@ -86,8 +86,8 @@ def test_log_files_present_in_logs_volume(juju: jubilant.Juju, substrate: Substr
         # the container shell runs as root, which can read the 0750 dirs
         prefix, sudo = ["--container", "valkey"], ""
     else:
-        log_dir = "/var/snap/charmed-valkey/common/var/log/valkey"
-        archive_dir = "/var/snap/charmed-valkey/common/var/backups/valkey"
+        log_dir = "/var/snap/valkey-charmed/common/var/log/valkey"
+        archive_dir = "/var/snap/valkey-charmed/common/var/backups/valkey"
         # the dirs are 0750 and root-owned (VM valkey runs as root); juju ssh
         # lands as the unprivileged ubuntu user, so inspect them via sudo
         prefix, sudo = [], "sudo "

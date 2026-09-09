@@ -68,8 +68,6 @@ parts:
       - libffi-dev # Needed to build Python dependencies with Rust from source
       - libssl-dev # Needed to build Python dependencies with Rust from source
       - pkg-config # Needed to build Python dependencies with Rust from source
-      - libprotobuf-dev # Needed to build Valkey-glide
-      - protobuf-compiler # Needed to build Valkey-glide
     override-build: |
       # Workaround for https://github.com/canonical/charmcraft/issues/2068
       # rustup used to install rustc and cargo, which are needed to build Python dependencies with Rust from source

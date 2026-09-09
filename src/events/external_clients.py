@@ -226,8 +226,7 @@ class ExternalClientsEvents(ops.Object):
             except (ValkeyCannotGetPrimaryIPError, ValkeyWorkloadCommandError) as e:
                 logger.error("Error updating client relations: %s", e)
                 event.defer()
-            finally:
-                return
+            return
 
         # from here on, the code is only relevant for non-leader units
         if (

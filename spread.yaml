@@ -95,6 +95,9 @@ backends:
       # To install pipx on self-hosted runners
       CONCIERGE_EXTRA_DEBS: pipx
       DOCKERHUB_MIRROR: "$(HOST: echo $DOCKERHUB_MIRROR)"
+      # Service-account key for the real-GCS backup module. Must be base64 JSON:
+      # spread exports host values in unescaped double quotes.
+      GCS_SERVICE_ACCOUNT: "$(HOST: echo $GCS_SERVICE_ACCOUNT)"
     systems:
       - ubuntu-24.04:
           username: runner
@@ -185,7 +188,6 @@ prepare: |
   fi
 
   pipx install tox poetry
-  rustup default 1.90.0
 prepare-each: |
   cd "$SPREAD_PATH"
   # `concierge prepare` needs to be run for each spread job in case Juju version changed

@@ -15,6 +15,7 @@ from tenacity import retry, retry_if_result, stop_after_attempt, wait_fixed
 from common.client import SentinelClient
 from common.exceptions import (
     CannotSeeAllActiveSentinelsError,
+    NotAllDepartingSentinelsStoppedError,
     SentinelFailoverError,
     SentinelIncorrectReplicaCountError,
     ValkeyCannotGetPrimaryIPError,
@@ -35,7 +36,7 @@ from literals import (
     K8sService,
     Substrate,
 )
-from statuses import CharmStatuses
+from statuses import CharmStatuses, ScaleDownStatuses
 
 logger = logging.getLogger(__name__)
 
@@ -202,6 +203,11 @@ class SentinelManager(ManagerStatusProtocol):
 
         return True
 
+    def is_sentinel_active(self, sentinel_ip: str) -> bool:
+        """Check if the sentinel is active and responds to a ping."""
+        client = self._get_sentinel_client()
+        return client.ping(hostname=sentinel_ip)
+
     def failover(self) -> None:
         """Trigger a failover in the cluster.
 
@@ -218,6 +224,40 @@ class SentinelManager(ManagerStatusProtocol):
         except ValkeyWorkloadCommandError as e:
             logger.error("Failed to trigger failover: %s", e)
             raise SentinelFailoverError from e
+
+    def remove_departed_sentinels_from_cluster(self) -> None:
+        """Ensure departed units get removed from the Sentinel cluster.
+
+        Raises:
+            ValkeyCannotGetPrimaryIPError: If fails to query primary
+            ValkeyWorkloadCommandError: If any client command fails
+            NotAllDepartingSentinelsStoppedError: If a departing unit has not yet stopped its Sentinel
+            CannotSeeAllActiveSentinelsError: If any Sentinel does not see all other Sentinels
+            SentinelIncorrectReplicaCountError: If any sentinel sees an incorrect number of replicas
+        """
+        if not self.state.cluster.model.sentinel_reset_required:
+            return
+
+        logger.info("Resetting Sentinels after unit removal")
+        primary_ip = self.get_primary_ip()
+        active_sentinels = self.get_active_sentinel_ips(primary_ip)
+        expected_sentinels = self.all_sentinel_endpoints()
+
+        # ensure that no departing sentinels is still alive before the reset
+        if (
+            len(expected_sentinels) != self.state.model.app.planned_units()
+            or len(active_sentinels) != self.state.model.app.planned_units()
+            or set(active_sentinels) != set(expected_sentinels)
+        ):
+            raise NotAllDepartingSentinelsStoppedError(
+                "Cluster should have %s units, but %s Sentinels are active",
+                self.state.model.app.planned_units(),
+                len(active_sentinels),
+            )
+
+        self.reset_sentinel_states(active_sentinels)
+        self.verify_expected_replica_count(active_sentinels)
+        self.state.cluster.update({"sentinel_reset_required": False})
 
     def reset_sentinel_states(self, sentinel_ips: list[str]) -> None:
         """Reset the sentinel states on all sentinels in the cluster.
@@ -241,6 +281,10 @@ class SentinelManager(ManagerStatusProtocol):
                 raise CannotSeeAllActiveSentinelsError(
                     "Sentinel at %s does not see all other sentinels after reset." % sentinel_ip
                 )
+
+            # ensure the cluster can still reach quorum before continuing to the next sentinel
+            primary_ip = self.get_primary_ip()
+            logger.debug("Reset completed for %s, primary ip is %s", sentinel_ip, primary_ip)
 
     @retry(
         wait=wait_fixed(5),
@@ -346,9 +390,16 @@ class SentinelManager(ManagerStatusProtocol):
         """
         client = self._get_sentinel_client()
 
-        return [hostname] + [
+        all_sentinels = [hostname] + [
             sentinel["ip"] for sentinel in client.sentinels_primary(hostname=hostname)
         ]
+
+        active_sentinels = []
+        for sentinel in all_sentinels:
+            if self.is_sentinel_active(sentinel):
+                active_sentinels.append(sentinel)
+
+        return active_sentinels
 
     def restart_service(self) -> None:
         """Restart the sentinel service to load configuration."""
@@ -449,6 +500,17 @@ class SentinelManager(ManagerStatusProtocol):
         status_list: list[StatusObject] = self.state.statuses.get(
             scope=scope, component=self.name, running_status_only=True, running_status_type="async"
         ).root
+
+        # Peer relation not established yet or model not built yet
+        if not self.state.cluster.model:
+            return status_list or [CharmStatuses.ACTIVE_IDLE.value]
+
+        if (
+            scope == "app"
+            and self.state.cluster.model.sentinel_reset_required
+            and self.state.model.app.planned_units() != 0
+        ):
+            status_list.append(ScaleDownStatuses.SENTINEL_NOT_REMOVED_AFTER_SCALEDOWN.value)
 
         return status_list or [CharmStatuses.ACTIVE_IDLE.value]
 

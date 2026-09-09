@@ -4,6 +4,7 @@
 
 """Collection of state objects for the Valkey relations, apps and units."""
 
+import base64
 import json
 import logging
 from collections.abc import MutableMapping
@@ -33,7 +34,11 @@ from pydantic import (
 from typing_extensions import Annotated
 
 from literals import (
+    AZURE_HTTP_PROTOCOLS,
+    AZURE_HTTPS_PROTOCOLS,
+    AZURE_REJECTED_PROTOCOLS,
     CLIENTS_USERS_SECRET_LABEL_SUFFIX,
+    GCS_STORAGE_CLASSES,
     INTERNAL_CERTS_SECRET_LABEL_SUFFIX,
     INTERNAL_USERS_SECRET_LABEL_SUFFIX,
     CharmUsers,
@@ -117,6 +122,185 @@ class S3Parameters(BaseModel):
         return value
 
 
+class AzureStorageParameters(BaseModel):
+    """Validated, normalised Azure Blob parameters from the azure_storage relation.
+
+    Parses the azure-storage-integrator payload (hyphenated keys) into typed
+    attributes, trimming whitespace and the separators that would corrupt blob
+    key paths, and rejecting a payload missing a required field or whose
+    container/path strip to empty. ``path`` is required at the charm layer even
+    though the lib contract leaves it optional, so listing can never enumerate
+    the whole container. Unknown integrator fields are ignored.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    container: str
+    storage_account: str = Field(alias="storage-account")
+    secret_key: str = Field(alias="secret-key")
+    connection_protocol: str = Field(alias="connection-protocol")
+    path: str
+    endpoint: str | None = None
+    resource_group: str | None = Field(alias="resource-group", default=None)
+
+    @field_validator(
+        "container",
+        "storage_account",
+        "secret_key",
+        "connection_protocol",
+        "path",
+        "endpoint",
+        "resource_group",
+        mode="before",
+    )
+    @classmethod
+    def _strip_whitespace(cls, value: object) -> object:
+        # A copy-pasted key with a trailing newline is common.
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("connection_protocol", mode="before")
+    @classmethod
+    def _lowercase_protocol(cls, value: object) -> object:
+        # The protocol is matched against lowercase scheme sets downstream; an
+        # integrator sending "HTTPS" must not fall through to the http branch.
+        return value.lower() if isinstance(value, str) else value
+
+    @field_validator("endpoint")
+    @classmethod
+    def _strip_trailing_slash(cls, value: str | None) -> str | None:
+        # A trailing "/" on the endpoint would double up in the request URL.
+        return value.rstrip("/") if value else value
+
+    @field_validator("container", "path")
+    @classmethod
+    def _strip_surrounding_slashes(cls, value: str) -> str:
+        # Leading/trailing "/" would yield blob names like "//<id>"; stripping
+        # also collapses container="/" or path="/" to "" so _reject_empty catches it.
+        return value.strip("/")
+
+    @field_validator("container", "storage_account", "secret_key", "connection_protocol", "path")
+    @classmethod
+    def _reject_empty(cls, value: str, info: ValidationInfo) -> str:
+        # An empty path makes list_backups enumerate the whole container
+        # (cross-tenant leak in a shared container); reject empties outright.
+        if not value:
+            raise ValueError(f"{info.field_name} must not be empty")
+        return value
+
+    @field_validator("connection_protocol")
+    @classmethod
+    def _require_a_blob_protocol(cls, value: str) -> str:
+        # abfs/abfss are ADLS-Gen2 (*.dfs.*) endpoints served by the datalake SDK,
+        # not BlobServiceClient; reject rather than silently mis-talk the Blob API.
+        if value in AZURE_REJECTED_PROTOCOLS:
+            raise ValueError(f"connection-protocol {value} (ADLS-Gen2) is not supported")
+        # Anything outside the integrator's documented set would fall through to
+        # the plaintext branch of the account URL and fail obscurely at request
+        # time; refuse it here, at the relation boundary, instead.
+        if value not in AZURE_HTTPS_PROTOCOLS | AZURE_HTTP_PROTOCOLS:
+            raise ValueError(f"connection-protocol {value} is not an Azure Blob protocol")
+        return value
+
+
+class GCSParameters(BaseModel):
+    """Validated, normalised GCS parameters from the gcs relation.
+
+    Same rules as ``AzureStorageParameters``: hyphenated keys, whitespace and
+    separators trimmed, ``path`` required so listing never enumerates the whole
+    bucket, unknown fields ignored.
+
+    ``secret-key`` is the service-account key: a dict (the lib json-decodes
+    every field), JSON text, or base64 JSON. It is stored as canonical JSON
+    text. ``hide_input_in_errors`` keeps the key out of the logged validation
+    error.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore", hide_input_in_errors=True)
+
+    bucket: str
+    path: str
+    secret_key: str = Field(alias="secret-key")
+    storage_class: str | None = Field(alias="storage-class", default=None)
+
+    @field_validator("bucket", "path", "storage_class", mode="before")
+    @classmethod
+    def _strip_whitespace(cls, value: object) -> object:
+        # A copy-pasted value with a trailing newline is common.
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("secret_key", mode="before")
+    @classmethod
+    def _coerce_service_account_key(cls, value: object) -> object:
+        # Error messages name the field only: the value is a private key.
+        if isinstance(value, dict):
+            return json.dumps(value, sort_keys=True)
+        if not isinstance(value, str):
+            return value  # let pydantic report the type
+        text = value.strip()
+        if not text:
+            return text  # _reject_empty names the field
+        try:
+            info = json.loads(text)
+        except json.JSONDecodeError:
+            # Drop the line wrapping `base64` adds by default.
+            packed = "".join(text.split())
+            try:
+                info = json.loads(base64.b64decode(packed, altchars=b"-_", validate=True))
+            except ValueError:  # binascii.Error, UnicodeDecodeError, JSONDecodeError
+                raise ValueError(
+                    "secret-key is neither a JSON nor a base64 JSON service-account key"
+                ) from None
+        if not isinstance(info, dict):
+            raise ValueError("secret-key is not a JSON object")
+        # sort_keys: the same key in another order must equal the stored envelope.
+        return json.dumps(info, sort_keys=True)
+
+    @field_validator("bucket", "path")
+    @classmethod
+    def _strip_surrounding_slashes(cls, value: str) -> str:
+        # Leading/trailing "/" would yield object names like "//<id>"; stripping
+        # also collapses bucket="/" or path="/" to "" so _reject_empty catches it.
+        return value.strip("/")
+
+    @field_validator("bucket", "path", "secret_key")
+    @classmethod
+    def _reject_empty(cls, value: str, info: ValidationInfo) -> str:
+        # An empty path makes list_backups enumerate the whole bucket
+        # (cross-tenant leak in a shared bucket); reject empties outright.
+        if not value:
+            raise ValueError(f"{info.field_name} must not be empty")
+        return value
+
+    @field_validator("secret_key")
+    @classmethod
+    def _require_a_service_account_key(cls, value: str) -> str:
+        # What the SDK needs to sign a token; refuse here, not at the first upload.
+        if not value:
+            return value  # _reject_empty reports it
+        info = json.loads(value)  # canonical JSON object by now
+        for field in ("client_email", "private_key"):
+            if not info.get(field):
+                raise ValueError(f"secret-key is missing {field}")
+        return value
+
+    @field_validator("storage_class")
+    @classmethod
+    def _require_a_known_storage_class(cls, value: str | None) -> str | None:
+        # Empty (the integrator's default) reads as "not requested".
+        if not value:
+            return None
+        upper = value.upper()
+        if upper not in GCS_STORAGE_CLASSES:
+            raise ValueError(f"storage-class {upper} is not a GCS storage class")
+        return upper
+
+
+# Every backend's validated credentials envelope. A backend widens this union,
+# and the layers above (ClusterState, BackupManager, build_backend) follow
+# without a signature change of their own.
+BackupCredentials = S3Parameters | AzureStorageParameters | GCSParameters
+
+
 class PeerAppModel(PeerModel):
     """Model for the peer application data."""
 
@@ -135,10 +319,13 @@ class PeerAppModel(PeerModel):
     client_user_epoch: float = Field(default=0)
     ldap_user_epoch: float | int = Field(default=0)
     s3_credentials: ExtraSecretStr = Field(default=None)
+    azure_credentials: ExtraSecretStr = Field(default=None)
+    gcs_credentials: ExtraSecretStr = Field(default=None)
     restore_id: str = Field(default="")
     restore_token: str = Field(default="")
     restore_instruction: str = Field(default="")
     restore_participants: str = Field(default="")
+    sentinel_reset_required: bool = Field(default=False)
 
 
 class PeerUnitModel(PeerModel):
@@ -159,13 +346,13 @@ class PeerUnitModel(PeerModel):
     is_valkey_healthy: bool = Field(default=True)
     is_sentinel_healthy: bool = Field(default=True)
     client_user_epoch: float = Field(default=0)
-    topology_observer_pid: int = Field(default=0)
     backup_id: str = Field(default="")
     restore_step: str = Field(default="")
     restore_role: str = Field(default="")
     restore_failed: str = Field(default="")
     ldap_enabled: bool = Field(default=False)
     ldap_user_epoch: float | int = Field(default=0)
+    ldap_sync_failed: bool = Field(default=False)
 
 
 class RelationState:
@@ -371,6 +558,36 @@ class ValkeyCluster(RelationState):
             return None
         try:
             return S3Parameters.model_validate_json(self.model.s3_credentials)
+        except ValidationError:
+            return None
+
+    @property
+    def azure_credentials(self) -> "AzureStorageParameters | None":
+        """Return the parsed Azure Blob connection payload, or None if not set.
+
+        Mirrors ``s3_credentials``: the leader writes a JSON-serialised
+        ``AzureStorageParameters``, and a parse failure here is defensive
+        (the payload was validated before writing) and also reads as unset.
+        """
+        if not self.model or not self.model.azure_credentials:
+            return None
+        try:
+            return AzureStorageParameters.model_validate_json(self.model.azure_credentials)
+        except ValidationError:
+            return None
+
+    @property
+    def gcs_credentials(self) -> "GCSParameters | None":
+        """Return the parsed GCS connection payload, or None if not set.
+
+        Mirrors ``s3_credentials``: the leader writes a JSON-serialised
+        ``GCSParameters``, and a parse failure here is defensive (the payload
+        was validated before writing) and also reads as unset.
+        """
+        if not self.model or not self.model.gcs_credentials:
+            return None
+        try:
+            return GCSParameters.model_validate_json(self.model.gcs_credentials)
         except ValidationError:
             return None
 

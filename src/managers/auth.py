@@ -122,6 +122,11 @@ class AuthManager(ManagerStatusProtocol):
         Returns:
             str: ACL lines for the external client users.
         """
+        valkey_base_permissions = (
+            "-@all +@read +@write +@keyspace -migrate +@pubsub +@transaction +info +ping +role "
+        )
+        valkey_scripting_permissions = "+eval +evalsha +@scripting "
+        valkey_client_caching_permissions = "+client|id +client|tracking "
         sentinel_base_permissions = "-@all +auth +client +command +hello +ping +role "
         sentinel_sentinel_permissions = "+sentinel|get-master-addr-by-name +sentinel|master +sentinel|masters +sentinel|replicas +sentinel|sentinels"
         acl_content = ""
@@ -130,7 +135,13 @@ class AuthManager(ManagerStatusProtocol):
             return acl_content
 
         for username, values in external_client_users.items():
-            permissions = f"-@all +@read +@write +@keyspace +@pubsub +@transaction +info +ping +role ~{values['resource']} &{values['resource']}"
+            user_specific_permissions = f"~{values['resource']} &{values['resource']}"
+            permissions = (
+                valkey_base_permissions
+                + valkey_client_caching_permissions
+                + valkey_scripting_permissions
+                + user_specific_permissions
+            )
             if for_sentinel:
                 permissions = sentinel_base_permissions + sentinel_sentinel_permissions
             password_hash = hashlib.sha256(values["password"].encode("utf-8")).hexdigest()
@@ -150,6 +161,8 @@ class AuthManager(ManagerStatusProtocol):
         acl_content = ""
         if not self.state.is_ldap_valid:
             return acl_content
+
+        self.state.unit_server.update({"ldap-sync-failed": False})
 
         # get non-LDAP users to avoid adding duplicate usernames to ACL files
         internal_users = [user.value for user in CharmUsers]
@@ -201,6 +214,7 @@ class AuthManager(ManagerStatusProtocol):
             ldap_connection = self._get_ldap_connection()
         except ldap3.core.exceptions.LDAPException as e:
             logger.error("Could not get LDAP connection: %s", e)
+            self.state.unit_server.update({"ldap-sync-failed": True})
             return ldap_users
 
         base_dn = self.state.ldap.base_dn
@@ -221,9 +235,11 @@ class AuthManager(ManagerStatusProtocol):
                     ldap_group,
                     search_attribute,
                 )
+                self.state.unit_server.update({"ldap-sync-failed": True})
                 return ldap_users
         except ldap3.core.exceptions.LDAPException as e:
             logger.error("Could not get LDAP connection: %s", e)
+            self.state.unit_server.update({"ldap-sync-failed": True})
             return ldap_users
 
         for entry in ldap_connection.entries:
@@ -318,7 +334,10 @@ class AuthManager(ManagerStatusProtocol):
         if not self.state.unit_server.is_ldap_enabled:
             status_list.append(AuthStatuses.LDAP_NOT_ENABLED.value)
 
-        if self.state.unit_server.model.ldap_user_epoch < self.state.cluster.model.ldap_user_epoch:
+        if (
+            self.state.unit_server.model.ldap_user_epoch < self.state.cluster.model.ldap_user_epoch
+            or self.state.unit_server.model.ldap_sync_failed
+        ):
             status_list.append(AuthStatuses.LDAP_USER_SYNC_FAILED.value)
 
         return status_list if status_list else [CharmStatuses.ACTIVE_IDLE.value]

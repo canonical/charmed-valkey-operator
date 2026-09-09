@@ -26,10 +26,11 @@ jobs:
     name: Release charm
     needs:
       - ci-tests
-    uses: canonical/data-platform-workflows/.github/workflows/release_charm_edge.yaml@v40.0.2
+    uses: canonical/data-platform-workflows/.github/workflows/release_charm_edge.yaml@v42.1.0
     with:
       track: ${{ matrix.charm.track }}
       artifact-prefix: ${{ needs.ci-tests.outputs.artifact-prefix }}
+      charmcraft-snap-revision: "8022"
     secrets:
       charmhub-token: ${{ secrets.CHARMHUB_TOKEN }}
     permissions:

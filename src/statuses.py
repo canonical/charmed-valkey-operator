@@ -101,6 +101,10 @@ class ScaleDownStatuses(Enum):
         status="maintenance",
         message="Waiting for juju to remove the unit...",
     )
+    SENTINEL_NOT_REMOVED_AFTER_SCALEDOWN = StatusObject(
+        status="maintenance",
+        message="Not all Sentinels removed after scale down",
+    )
 
 
 class TLSStatuses(Enum):
@@ -162,9 +166,13 @@ class BackupStatuses(Enum):
         message="Creating database backup...",
         running="async",
     )
-    BACKUP_S3_PARAMETERS_MISSING = StatusObject(
+    BACKUP_CREDENTIALS_MISSING = StatusObject(
         status="blocked",
-        message="Missing or invalid S3 credentials",
+        message="Missing or invalid backup storage credentials",
+    )
+    BACKUP_BACKENDS_CONFLICT = StatusObject(
+        status="blocked",
+        message="More than one backup storage integrator related; relate exactly one",
     )
     BACKUP_FAILED = StatusObject(
         status="blocked",

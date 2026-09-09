@@ -9,7 +9,7 @@ from ops import testing
 
 from charm import ValkeyCharm
 from common.exceptions import ValkeyCannotGetPrimaryIPError, ValkeyWorkloadCommandError
-from literals import CONTAINER, PEER_RELATION, ScaleDownState
+from literals import CONTAINER, PEER_RELATION, STATUS_PEERS_RELATION, ScaleDownState
 from statuses import ScaleDownStatuses
 from tests.unit.helpers import status_is
 
@@ -97,17 +97,12 @@ def test_non_primary(cloud_spec):
             "common.client.SentinelClient.sentinels_primary",
             side_effect=[
                 [{"ip": "valkey-0"}, {"ip": "valkey-2"}],  # for get_active_sentinel_ips
-                [{"ip": "valkey-2"}],  # for target_sees_all_others unit valkey-1
-                [{"ip": "valkey-1"}],  # for target_sees_all_others unit valkey-2
             ],
         ),
-        patch(
-            "common.client.SentinelClient.replicas_primary", return_value=[{"ip": "ip"}]
-        ),  # we need the len to be 1
     ):
         state_out = ctx.run(ctx.on.storage_detaching(data_strorage), state_in)
         mock_stop.assert_called_once()
-        assert mock_reset.call_count == 2
+        mock_reset.assert_not_called()
         assert get_replica_offset.call_count == 2
         save_dataset.assert_called_once()
         status_is(state_out, ScaleDownStatuses.GOING_AWAY.value)
@@ -153,17 +148,12 @@ def test_non_primary_block_until_synced(cloud_spec):
             "common.client.SentinelClient.sentinels_primary",
             side_effect=[
                 [{"ip": "valkey-0"}, {"ip": "valkey-2"}],  # for get_active_sentinel_ips
-                [{"ip": "valkey-2"}],  # for target_sees_all_others unit valkey-1
-                [{"ip": "valkey-1"}],  # for target_sees_all_others unit valkey-2
             ],
         ),
-        patch(
-            "common.client.SentinelClient.replicas_primary", return_value=[{"ip": "ip"}]
-        ),  # we need the len to be 1
     ):
         state_out = ctx.run(ctx.on.storage_detaching(data_strorage), state_in)
         mock_stop.assert_called_once()
-        assert mock_reset.call_count == 2
+        mock_reset.assert_not_called()
         assert get_replica_offset.call_count == 3
         save_dataset.assert_called_once()
         status_is(state_out, ScaleDownStatuses.GOING_AWAY.value)
@@ -203,23 +193,18 @@ def test_primary(cloud_spec):
             "common.client.SentinelClient.sentinels_primary",
             side_effect=[
                 [{"ip": "10.0.1.1"}, {"ip": "10.0.1.2"}],  # for get_active_sentinel_ips
-                [],  # for target_sees_all_others unit 10.0.1.1 not yet
-                ValkeyWorkloadCommandError(
-                    "errored out"
-                ),  # for target_sees_all_others unit 10.0.1.1 network mishap
-                [{"ip": "10.0.1.2"}],  # for target_sees_all_others unit 10.0.1.1
-                [{"ip": "10.0.1.1"}],  # for target_sees_all_others unit 10.0.1.2
             ],
         ),
         patch(
-            "common.client.SentinelClient.replicas_primary", return_value=[{"ip": "ip"}]
-        ),  # we need the len to be 1
+            "common.client.SentinelClient.ping",
+            side_effect=[True, False, True],  # valkey-1 is no longer active
+        ),
     ):
         state_out = ctx.run(ctx.on.storage_detaching(data_strorage), state_in)
         mock_failover.assert_called_once()
         mock_failover_in_progress.assert_called_once()
         mock_stop.assert_called_once()
-        assert mock_reset.call_count == 2
+        mock_reset.assert_not_called()
         get_replica_offset.assert_not_called()
         save_dataset.assert_called_once()
         status_is(state_out, ScaleDownStatuses.GOING_AWAY.value)
@@ -381,4 +366,235 @@ def test_cannot_get_primary_ip_leader(cloud_spec):
         status_is(state_out, ScaleDownStatuses.GOING_AWAY.value)
         cluster_update.assert_called_once_with(
             {"internal_ca_certificate": None, "internal_ca_private_key": None}
+        )
+
+
+def test_unit_departure_sentinel_reset_flag(cloud_spec):
+    """Test that the flag for removing Sentinels is set on peer-relation-departed."""
+    ctx = testing.Context(ValkeyCharm, app_trusted=True)
+    relation = testing.PeerRelation(
+        id=1,
+        endpoint=PEER_RELATION,
+        local_unit_data={
+            "hostname": "valkey-0",
+            "private-ip": "10.0.1.0",
+            "start-state": "started",
+        },
+        peers_data={
+            1: {
+                "hostname": "valkey-2",
+                "private-ip": "10.0.1.2",
+                "start-state": "started",
+            }
+        },
+    )
+    container = testing.Container(name=CONTAINER, can_connect=True)
+    state_in = testing.State(
+        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        relations={relation},
+        leader=True,
+        planned_units=2,
+        containers={container},
+    )
+    state_out = ctx.run(ctx.on.relation_departed(relation, remote_unit=2), state_in)
+    assert state_out.get_relation(1).local_app_data.get("sentinel-reset-required") == "true"
+
+
+def test_unit_departure_leader(cloud_spec):
+    """Test Sentinel removal after scale down."""
+    ctx = testing.Context(ValkeyCharm, app_trusted=True)
+    relation = testing.PeerRelation(
+        id=1,
+        endpoint=PEER_RELATION,
+        local_app_data={"sentinel-reset-required": "True"},
+        local_unit_data={
+            "hostname": "valkey-0",
+            "private-ip": "10.0.1.0",
+            "start-state": "started",
+        },
+        peers_data={
+            1: {
+                "hostname": "valkey-2",
+                "private-ip": "10.0.1.2",
+                "start-state": "started",
+            }
+        },
+    )
+    status_peer_relation = testing.PeerRelation(id=2, endpoint=STATUS_PEERS_RELATION)
+    container = testing.Container(name=CONTAINER, can_connect=True)
+    state_in = testing.State(
+        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        relations={relation, status_peer_relation},
+        leader=True,
+        planned_units=2,
+        containers={container},
+    )
+
+    with (
+        patch(
+            "core.cluster_state.ClusterState.bind_address",
+            new_callable=PropertyMock(return_value="10.0.1.0"),
+        ),
+        patch("managers.sentinel.SentinelManager.get_primary_ip", return_value="valkey-0"),
+        patch("events.base_events.BaseEvents._reconfigure_quorum_if_necessary"),
+        patch("managers.cluster.ClusterManager.reconcile_min_replicas_to_write"),
+        patch(
+            "common.client.SentinelClient.sentinels_primary",
+            side_effect=[
+                [{"ip": "valkey-1"}, {"ip": "valkey-2"}],  # for get_active_sentinel_ips
+                [{"ip": "valkey-2"}],  # for target_sees_all_others unit valkey-0
+                [{"ip": "valkey-0"}],  # for target_sees_all_others unit valkey-2
+            ],
+        ),
+        patch(
+            "common.client.SentinelClient.ping",
+            side_effect=[True, False, True],  # valkey-1 is no longer active
+        ),
+        patch("common.client.SentinelClient.reset"),
+        patch(
+            "common.client.SentinelClient.replicas_primary",
+            side_effect=[{"ip": "ip"}, {"ip": "ip"}],
+        ),
+    ):
+        state_out = ctx.run(ctx.on.relation_changed(relation, remote_unit=2), state_in)
+        assert state_out.get_relation(1).local_app_data.get("sentinel-reset-required") == "false"
+
+
+def test_unit_departure_not_yet_removed(cloud_spec):
+    """Test scale-down behavior when this unit is the primary and successfully acquires the lock."""
+    ctx = testing.Context(ValkeyCharm, app_trusted=True)
+    relation = testing.PeerRelation(
+        id=1,
+        endpoint=PEER_RELATION,
+        local_app_data={"sentinel-reset-required": "True"},
+        local_unit_data={
+            "hostname": "valkey-0",
+            "private-ip": "10.0.1.0",
+            "start-state": "started",
+        },
+        peers_data={
+            1: {
+                "hostname": "valkey-2",
+                "private-ip": "10.0.1.2",
+                "start-state": "started",
+            }
+        },
+    )
+    status_peer_relation = testing.PeerRelation(id=2, endpoint=STATUS_PEERS_RELATION)
+    container = testing.Container(name=CONTAINER, can_connect=True)
+    state_in = testing.State(
+        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        relations={relation, status_peer_relation},
+        leader=True,
+        planned_units=2,
+        containers={container},
+    )
+
+    with (
+        patch(
+            "core.cluster_state.ClusterState.bind_address",
+            new_callable=PropertyMock(return_value="10.0.1.0"),
+        ),
+        patch("managers.sentinel.SentinelManager.get_primary_ip", return_value="valkey-0"),
+        patch(
+            "common.client.SentinelClient.sentinels_primary",
+            side_effect=[
+                [{"ip": "valkey-1"}, {"ip": "valkey-2"}],  # for get_active_sentinel_ips
+            ],
+        ),
+        patch(
+            "common.client.SentinelClient.ping",
+            side_effect=[True, True, True],  # valkey-1 is still active
+        ),
+        patch("common.client.SentinelClient.replicas_primary") as verify,
+    ):
+        state_out = ctx.run(ctx.on.relation_changed(relation, remote_unit=2), state_in)
+        verify.assert_not_called()
+        assert "valkey_peers_relation_changed" in [e.name for e in state_out.deferred]
+        assert state_out.get_relation(1).local_app_data.get("sentinel-reset-required") == "true"
+        assert status_is(
+            state_out, ScaleDownStatuses.SENTINEL_NOT_REMOVED_AFTER_SCALEDOWN.value, is_app=True
+        )
+
+
+def test_unit_departure_leader_failed(cloud_spec):
+    """Test scale-down behavior when this unit is the primary and successfully acquires the lock."""
+    ctx = testing.Context(ValkeyCharm, app_trusted=True)
+    relation = testing.PeerRelation(
+        id=1,
+        endpoint=PEER_RELATION,
+        local_app_data={"sentinel-reset-required": "True"},
+        local_unit_data={
+            "hostname": "valkey-0",
+            "private-ip": "10.0.1.0",
+            "start-state": "started",
+        },
+        peers_data={
+            1: {
+                "hostname": "valkey-2",
+                "private-ip": "10.0.1.2",
+                "start-state": "started",
+            }
+        },
+    )
+    status_peer_relation = testing.PeerRelation(id=2, endpoint=STATUS_PEERS_RELATION)
+    container = testing.Container(name=CONTAINER, can_connect=True)
+    state_in = testing.State(
+        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        relations={relation, status_peer_relation},
+        leader=True,
+        planned_units=2,
+        containers={container},
+    )
+
+    with (
+        patch(
+            "core.cluster_state.ClusterState.bind_address",
+            new_callable=PropertyMock(return_value="10.0.1.0"),
+        ),
+        patch("managers.sentinel.SentinelManager.get_primary_ip", return_value="valkey-0"),
+        patch(
+            "common.client.SentinelClient.sentinels_primary",
+            side_effect=[
+                [{"ip": "valkey-2"}],  # for get_active_sentinel_ips
+                [{"ip": "valkey-2"}],  # for target_sees_all_others unit valkey-0
+                [{"ip": "valkey-0"}, {"ip": "valkey-1"}],  # valkey-2 still sees valkey-1
+            ],
+        ),
+        patch(
+            "common.client.SentinelClient.ping",
+            side_effect=[True, False, True],  # valkey-1 is no longer active
+        ),
+        patch("common.client.SentinelClient.reset"),
+        patch(
+            "common.client.SentinelClient.replicas_primary",
+            side_effect=[{"ip": "ip"}, {"another_ip": "another_ip"}],
+        ),
+    ):
+        state_out = ctx.run(ctx.on.relation_changed(relation, remote_unit=2), state_in)
+        assert state_out.get_relation(1).local_app_data.get("sentinel-reset-required") == "true"
+        assert "valkey_peers_relation_changed" in [e.name for e in state_out.deferred]
+        assert status_is(
+            state_out, ScaleDownStatuses.SENTINEL_NOT_REMOVED_AFTER_SCALEDOWN.value, is_app=True
+        )
+
+
+def test_unit_departure_non_leader(cloud_spec):
+    """Test scale-down behavior when this unit is the primary and successfully acquires the lock."""
+    ctx = testing.Context(ValkeyCharm, app_trusted=True)
+    relation = get_3_unit_peer_relation()
+    status_peer_relation = testing.PeerRelation(id=2, endpoint=STATUS_PEERS_RELATION)
+    container = testing.Container(name=CONTAINER, can_connect=True)
+    state_in = testing.State(
+        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        relations={relation, status_peer_relation},
+        leader=False,
+        containers={container},
+    )
+
+    with patch("managers.sentinel.SentinelManager.verify_expected_replica_count") as verify:
+        state_out = ctx.run(ctx.on.relation_changed(relation, remote_unit=2), state_in)
+        verify.assert_not_called()
+        assert not status_is(
+            state_out, ScaleDownStatuses.SENTINEL_NOT_REMOVED_AFTER_SCALEDOWN.value, is_app=True
         )

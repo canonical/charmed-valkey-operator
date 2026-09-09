@@ -64,6 +64,10 @@ class SentinelIncorrectReplicaCountError(Exception):
     """Custom Exception if the sentinel sees an incorrect number of replicas."""
 
 
+class NotAllDepartingSentinelsStoppedError(Exception):
+    """Custom Exception if not all departing Sentinels have already been stopped."""
+
+
 class RequestingLockTimedOutError(Exception):
     """Custom Exception if requesting a lock times out."""
 
@@ -76,8 +80,30 @@ class KubernetesClientError(Exception):
     """Custom Exception if a connection to the Kubernetes Cluster API fails."""
 
 
+class StorageBackendError(Exception):
+    """Backend-neutral remote-object-store failure.
+
+    Raised by every ``StorageBackend`` implementation so callers never have to
+    catch an SDK-specific exception; ``safe_code`` is the backend's structured
+    error code, forwarded onto the backup/restore error the manager raises.
+    """
+
+    def __init__(self, message: str, *, safe_code: str | None = None):
+        super().__init__(message)
+        self.safe_code = safe_code
+
+
 class ValkeyBackupError(Exception):
-    """Raised when a backup operation fails."""
+    """Raised when a backup operation fails.
+
+    ``safe_code`` is the structured error code from the failing object-storage
+    call (e.g. "AccessDenied"), safe to put in a world-readable action result;
+    the message itself is not (it carries endpoints and request ids).
+    """
+
+    def __init__(self, *args: object, safe_code: str | None = None):
+        super().__init__(*args)
+        self.safe_code = safe_code
 
 
 class ValkeyBackupInProgressError(ValkeyBackupError):
@@ -89,4 +115,11 @@ class ValkeyBackupInProgressError(ValkeyBackupError):
 
 
 class ValkeyRestoreError(Exception):
-    """Raised when a restore operation fails."""
+    """Raised when a restore operation fails.
+
+    Carries ``safe_code`` for the same reason as ``ValkeyBackupError``.
+    """
+
+    def __init__(self, *args: object, safe_code: str | None = None):
+        super().__init__(*args)
+        self.safe_code = safe_code

@@ -423,51 +423,97 @@ def test_failover_suppression_logs_in_the_manager(mocker, caplog):
 # ── backup manager: download / verify / restore primitives ───────────────────
 
 
-def test_download_backup_streams_body_to_data_partition_and_moves_atomically(mocker):
+def test_download_backup_streams_body_to_data_partition_and_moves_atomically(mocker, caplog):
     """The full RDB streams straight to the data partition; no whole-object charm buffer.
 
     The magic header is validated up front by verify_backup_is_rdb (a tiny ranged
-    GET), so download_backup itself just streams the S3 body onto disk.
+    read), so download_backup itself just streams the backend's body onto disk.
     """
+    import logging
+
+    from common.storage_backend import RemoteObject
     from src.managers.backup import BackupManager
 
     mgr = BackupManager.__new__(BackupManager)
-    mgr.state = mocker.Mock()
+    mgr.state = mocker.MagicMock()
     mgr.workload = mocker.Mock()
     mgr.workload.working_dir = mocker.MagicMock()  # download lands on the data partition
-    mgr.state.cluster.s3_credentials = mocker.Mock(path="valkey")
 
-    bucket = mocker.Mock()
-    body = mocker.Mock()  # the S3 StreamingBody
-    bucket.Object.return_value.get.return_value = {"Body": body}
-    mocker.patch.object(mgr, "_get_bucket_resource", return_value=bucket)
+    body = mocker.Mock()  # the backend's streaming body
+    backend = mocker.MagicMock()
+    backend.download.return_value = RemoteObject(body, 4096)
+    mocker.patch.object(BackupManager, "storage_backend", backend)
 
-    mgr.download_backup("2026-05-13T10:00:00Z")
+    with caplog.at_level(logging.INFO):
+        mgr.download_backup("2026-05-13T10:00:00Z")
 
-    # Fetched the object by key and pushed the streaming body straight through --
-    # the pushed source is the S3 body itself, not a charm-local temp file.
-    bucket.Object.assert_called_once_with("valkey/2026-05-13T10:00:00Z")
+    # Fetched the object by backup-id and pushed the streaming body straight
+    # through -- the pushed source is the backend's body, not a charm-local file.
+    backend.download.assert_called_once_with("2026-05-13T10:00:00Z")
     assert mgr.workload.push_data_file.call_args.args[0] is body
     # Then atomically promoted the .part file onto the final name.
     assert mgr.workload.move_file.called
+    # The size the backend reported rides along into the operator-facing trail.
+    assert "bytes=4096" in caplog.text
 
 
 def test_verify_backup_is_rdb_accepts_valid_head(mocker):
-    """Pre-stop check reads only the head via a ranged GET and passes a real RDB magic."""
+    """Pre-stop check reads only the head, not the whole object, and passes RDB magic."""
     from src.managers.backup import BackupManager
 
     mgr = BackupManager.__new__(BackupManager)
-    mgr.state = mocker.Mock()
-    mgr.state.cluster.s3_credentials = mocker.Mock(path="valkey")
-    bucket = mocker.Mock()
-    bucket.Object.return_value.get.return_value = {"Body": mocker.Mock(read=lambda: b"REDIS0011")}
-    mocker.patch.object(mgr, "_get_bucket_resource", return_value=bucket)
+    mgr.state = mocker.MagicMock()
+    backend = mocker.MagicMock()
+    backend.head.return_value = b"REDIS0011"
+    mocker.patch.object(BackupManager, "storage_backend", backend)
 
     mgr.verify_backup_is_rdb("2026-05-13T10:00:00Z")  # no raise
 
-    # ranged GET of just the head, not the whole object
-    bucket.Object.assert_called_once_with("valkey/2026-05-13T10:00:00Z")
-    bucket.Object.return_value.get.assert_called_once_with(Range="bytes=0-15")
+    # the head, never a download
+    backend.head.assert_called_once_with("2026-05-13T10:00:00Z")
+    backend.download.assert_not_called()
+
+
+def test_restore_reads_wrap_backend_errors_and_keep_the_code(mocker):
+    """verify/download turn a backend failure into a restore error, code intact.
+
+    The code is what the restore action puts in its (world-readable) result, so
+    it has to survive both hops -- backend to manager, manager to action.
+    """
+    from common.exceptions import StorageBackendError, ValkeyRestoreError
+    from src.managers.backup import BackupManager
+
+    mgr = BackupManager.__new__(BackupManager)
+    mgr.state = mocker.MagicMock()
+    mgr.workload = mocker.MagicMock()
+    backend = mocker.MagicMock()
+    backend.head.side_effect = StorageBackendError("x", safe_code="NoSuchKey")
+    backend.download.side_effect = StorageBackendError("x", safe_code="AccessDenied")
+    mocker.patch.object(BackupManager, "storage_backend", backend)
+
+    with pytest.raises(ValkeyRestoreError) as excinfo:
+        mgr.verify_backup_is_rdb("2026-05-13T10:00:00Z")
+    assert excinfo.value.safe_code == "NoSuchKey"
+
+    with pytest.raises(ValkeyRestoreError) as excinfo:
+        mgr.download_backup("2026-05-13T10:00:00Z")
+    assert excinfo.value.safe_code == "AccessDenied"
+
+
+def test_restore_reads_refuse_to_run_without_credentials(mocker):
+    """No related backup backend: fail the restore rather than reach for a client."""
+    from common.exceptions import ValkeyRestoreError
+    from src.managers.backup import BackupManager
+
+    mgr = BackupManager.__new__(BackupManager)
+    mgr.state = mocker.MagicMock()
+    mgr.state.active_backup_credentials = None
+    mgr.workload = mocker.MagicMock()
+
+    with pytest.raises(ValkeyRestoreError):
+        mgr.verify_backup_is_rdb("2026-05-13T10:00:00Z")
+    with pytest.raises(ValkeyRestoreError):
+        mgr.download_backup("2026-05-13T10:00:00Z")
 
 
 def test_verify_backup_is_rdb_rejects_bad_head(mocker):
@@ -476,13 +522,10 @@ def test_verify_backup_is_rdb_rejects_bad_head(mocker):
     from src.managers.backup import BackupManager
 
     mgr = BackupManager.__new__(BackupManager)
-    mgr.state = mocker.Mock()
-    mgr.state.cluster.s3_credentials = mocker.Mock(path="valkey")
-    bucket = mocker.Mock()
-    bucket.Object.return_value.get.return_value = {
-        "Body": mocker.Mock(read=lambda: b"NOT-AN-RDB..")
-    }
-    mocker.patch.object(mgr, "_get_bucket_resource", return_value=bucket)
+    mgr.state = mocker.MagicMock()
+    backend = mocker.MagicMock()
+    backend.head.return_value = b"NOT-AN-RDB.."
+    mocker.patch.object(BackupManager, "storage_backend", backend)
 
     with pytest.raises(ValkeyRestoreError):
         mgr.verify_backup_is_rdb("2026-05-13T10:00:00Z")
@@ -715,7 +758,9 @@ def _passing_restore_guard(mocker):
     ev.charm.backup_manager.list_backups.return_value = ["b1"]
     ev.charm.unit.is_leader.return_value = True
     ev.charm.state.s3_relation = True
-    ev.charm.state.cluster.s3_credentials = True
+    ev.charm.state.backup_relations = [True]
+    ev.charm.state.backup_backends_conflict = False
+    ev.charm.state.active_backup_credentials = True
     ev.charm.state.is_backup_in_progress_any = False
     ev.charm.state.cluster.is_restore_in_progress = False
     ev.charm.state.is_tls_transitioning = False
@@ -789,6 +834,7 @@ def test_credentials_rotation_defers_during_restore(mocker):
     mocker.patch("events.backup.S3Parameters.model_validate", return_value=mocker.Mock())
     ev.charm.unit.is_leader.return_value = True
     ev.charm.state.peer_relation = True
+    ev.charm.state.backup_backends_conflict = False
     ev.charm.state.cluster.s3_credentials = None  # nothing stored yet → a real change
     ev.charm.state.is_backup_in_progress_any = False
     ev.charm.state.cluster.is_restore_in_progress = True
@@ -797,7 +843,7 @@ def test_credentials_rotation_defers_during_restore(mocker):
     ev._on_s3_credentials_changed(event)
 
     event.defer.assert_called_once()
-    ev.charm.backup_manager.create_bucket.assert_not_called()
+    ev.charm.backup_manager.ensure_container.assert_not_called()
     ev.charm.backup_manager.store_tls_ca_chain.assert_called_once()  # CA still stored
 
 
@@ -808,7 +854,9 @@ def test_blocking_reason_blocks_backup_during_restore(mocker):
     ev = BackupEvents.__new__(BackupEvents)
     ev.charm = mocker.Mock()
     ev.charm.state.s3_relation = True
-    ev.charm.state.cluster.s3_credentials = True
+    ev.charm.state.backup_relations = [True]
+    ev.charm.state.backup_backends_conflict = False
+    ev.charm.state.active_backup_credentials = True
     ev.charm.workload.alive.return_value = True
     ev.charm.state.unit_server.is_backup_in_progress = False
     ev.charm.state.cluster.is_restore_in_progress = True
