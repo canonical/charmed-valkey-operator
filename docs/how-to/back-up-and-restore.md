@@ -4,15 +4,17 @@
 
 This guide walks you through protecting your Valkey data: taking point-in-time
 backups of your dataset to object storage, listing the backups you have taken,
-and restoring the whole cluster from any of them. Both S3-compatible object
-storage and Azure Blob storage are supported through their respective integrators.
+and restoring the whole cluster from any of them. S3-compatible object storage,
+Azure Blob storage, and Google Cloud Storage are supported through their
+respective integrators.
 
 The integrators store credentials. Charmed Valkey reads the credentials over the
 relation and never stores them in plain text.
 
 ```{caution}
-The storage integrators are mutually exclusive.
-Relating both blocks Charmed Valkey until you remove one.
+Only one storage integrator can be related at a time. Relating multiple
+integrators places Charmed Valkey in a blocked state until you remove the extra
+relations.
 ```
 
 ## S3-compatible object storage
@@ -118,6 +120,53 @@ it does not provide full feature parity with the S3 backend:
   from Azure Blob storage. Use a supported Blob protocol instead: `https` or
   `wasbs` for HTTPS, or `http` or `wasb` for HTTP.
 
+## Google Cloud Storage
+
+To use Google Cloud Storage for your backups, deploy
+[`gcs-integrator`](https://charmhub.io/gcs-integrator):
+
+```shell
+juju deploy gcs-integrator --channel 1/stable
+```
+
+Create a service account in your Google Cloud project and download its JSON key.
+Grant the service account permission to list, read, and write objects in the
+bucket. If the bucket does not exist yet, Charmed Valkey creates it, which also
+requires permission to create buckets in the project.
+
+Store the JSON key in a
+[Juju secret](https://canonical-juju.readthedocs-hosted.com/en/latest/user/reference/secret/)
+under the `secret-key` content key and grant access to the integrator:
+
+```shell
+juju add-secret gcs-creds secret-key#file=service-account.json
+juju grant-secret gcs-creds gcs-integrator
+```
+
+The `#file=` suffix tells Juju to read the value from the local file rather
+than from the command-line argument, keeping the private key out of your shell
+history.
+
+```{note}
+Charmed Valkey accepts service-account keys as plain JSON or base64-encoded JSON, so
+no decoding is required.
+```
+
+Point the integrator at the secret and configure the bucket:
+
+```shell
+juju config gcs-integrator \
+  credentials=secret:<SECRET_ID> \
+  bucket=<BUCKET> \
+  path=<PATH_PREFIX>
+```
+
+Finally, integrate Charmed Valkey with the GCS integrator:
+
+```shell
+juju integrate valkey:gcs-credentials gcs-integrator
+```
+
 ## Create a backup
 
 After relating an integrator, wait for it to reach `active` status. Run the
@@ -195,8 +244,9 @@ for one of the following messages:
   empty path by default, but Charmed Valkey requires a path to prevent
   `list-backups` from listing an entire bucket or container. If the problem
   persists, inspect `juju debug-log` for the leader unit.
-- **`More than one backup storage integrator related; relate exactly one`**: Both
-  `s3-integrator` and `azure-storage-integrator` are related. Remove one of the
-  integrations. Charmed Valkey automatically detects and uses the remaining
-  integrator. If the problem persists, check `juju debug-log` on the leader
-  unit for more details.
+- **`More than one backup storage integrator related; relate exactly one`**: Two
+  or more of `s3-integrator`, `azure-storage-integrator`, and `gcs-integrator`
+  are related. Remove the extra integrations. Charmed Valkey automatically
+  detects and uses the remaining integrator.
+
+If the problems persists, check `juju debug-log` on the leader unit for more details.
