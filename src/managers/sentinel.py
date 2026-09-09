@@ -22,6 +22,7 @@ from common.exceptions import (
     ValkeyWorkloadCommandError,
 )
 from common.k8s_client import K8sClient
+from common.network_utils import resolve_k8s_fqdn
 from core.base_workload import WorkloadBase
 from core.cluster_state import ClusterState
 from literals import (
@@ -152,7 +153,8 @@ class SentinelManager(ManagerStatusProtocol):
         if self.state.substrate == Substrate.K8S:
             # get the DNS name of the K8s service
             primary_address = f"{self.state.model.app.name}-{K8sService.PRIMARY.value}"
-            return f"{primary_address}:{port}"
+            primary_fqdn = resolve_k8s_fqdn(primary_address)
+            return f"{primary_fqdn}:{port}"
 
         primary_address = self.get_primary_ip()
         return f"{primary_address}:{port}"
@@ -164,7 +166,8 @@ class SentinelManager(ManagerStatusProtocol):
         if self.state.substrate == Substrate.K8S:
             # get the DNS name of the K8s service
             replicas_address = f"{self.state.model.app.name}-{K8sService.REPLICAS.value}"
-            return f"{replicas_address}:{port}"
+            replicas_fqdn = resolve_k8s_fqdn(replicas_address)
+            return f"{replicas_fqdn}:{port}"
 
         client = self._get_sentinel_client()
         replica_list = client.replicas_primary(hostname=self.state.endpoint)
