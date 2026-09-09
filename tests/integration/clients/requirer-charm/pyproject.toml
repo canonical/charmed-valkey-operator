@@ -7,7 +7,7 @@ requires-poetry = ">=2.0.0"
 
 [tool.poetry.dependencies]
 python = "^3.12"
-ops = "3.5.0"
+ops = "^3.5.0"
 pydantic = ">2.12.3"
 charmlibs-interfaces-tls-certificates = ">1.0"
 dpcharmlibs-interfaces = ">=1.0.2"
