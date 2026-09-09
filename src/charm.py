@@ -48,7 +48,7 @@ class ValkeyCharm(ops.CharmBase):
             try:
                 self.model.get_cloud_spec()
             except ops.ModelError:
-                logger.error("Application must be deployed with `trust` to get cloud spec")
+                logger.error("The `valkey` application must be deployed with the `--trust` flag.")
                 raise
             self.substrate = Substrate.K8S
             self.workload = ValkeyK8sWorkload(container=self.unit.get_container(CONTAINER))
