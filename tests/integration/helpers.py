@@ -7,7 +7,7 @@ import logging
 import re
 import subprocess
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Literal, NamedTuple
 
@@ -193,13 +193,46 @@ def are_agents_idle(
     )
 
 
+def utc_now() -> datetime:
+    """Return the current UTC time, naive, to compare against Juju status timestamps.
+
+    Juju reports timestamps in UTC and they are parsed with `ignoretz`, so the value they
+    are compared against has to be UTC too. `datetime.now()` is local: anywhere east of
+    Greenwich it runs ahead, and every elapsed-time check passes by that offset alone.
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 def _check_apps_idle_period(status: jubilant.Status, *apps: str, idle_period: int) -> bool:
     return all(
-        parse(unit.juju_status.since, ignoretz=True) + timedelta(seconds=idle_period)
-        < datetime.now()
+        parse(unit.juju_status.since, ignoretz=True) + timedelta(seconds=idle_period) < utc_now()
         for app in apps
         for unit in status.get_units(app).values()
     )
+
+
+def has_leader_settled_since(
+    status: jubilant.Status, app: str, since: datetime, idle_period: int = 0
+) -> bool:
+    """Whether the leader has run a hook and gone idle again after `since` (naive UTC).
+
+    An `idle_period` on its own cannot express "the charm has reacted to X". An agent that
+    has not been woken yet still carries the idle timestamp it had before X, and that
+    timestamp already satisfies any period, so the wait returns on its first poll and the
+    test races ahead of the charm. Anchoring on `since` waits for the leader to actually
+    pick the event up; the period then lets any deferral it left behind drain.
+
+    Only the leader is considered: handlers such as `topology_changed` are leader-only and
+    write no peer data, so the other units are never woken and would never settle.
+    """
+    for unit in status.get_units(app).values():
+        if not unit.leader:
+            continue
+        if unit.juju_status.current != "idle":
+            return False
+        idle_since = parse(unit.juju_status.since, ignoretz=True)
+        return idle_since >= since and idle_since + timedelta(seconds=idle_period) < utc_now()
+    return False
 
 
 def verify_unit_count(

@@ -28,6 +28,7 @@ SENTINEL_ACL_FILE = "var/lib/valkey/sentinel-users.acl"
 TOPOLOGY_OBSERVER_LOG_FILENAME = "topology_observer.log"
 TOPOLOGY_OBSERVER_TLS_CA_FILENAME = "valkey_ca.pem"
 TOPOLOGY_OBSERVER_PID_FILENAME = "topology_observer.pid"
+TOPOLOGY_OBSERVER_SIGNATURE_FILENAME = "topology_observer.signature"
 
 PEER_RELATION = "valkey-peers"
 STATUS_PEERS_RELATION = "status-peers"
