@@ -28,6 +28,8 @@ CONTAINER = "valkey"
 SERVICE_VALKEY = "valkey"
 SERVICE_METRIC_EXPORTER = "metrics-exporter"
 SERVICE_SENTINEL = "sentinel"
+SERVICE_VALKEY_LOGS = "valkey-logs"
+SERVICE_SENTINEL_LOGS = "sentinel-logs"
 
 
 internal_passwords_secret = testing.Secret(
@@ -73,6 +75,22 @@ def test_start_primary():
                 "override": "replace",
                 "summary": "Valkey metric exporter",
                 "command": "prometheus-redis-exporter",
+                "user": CHARM_USER,
+                "group": CHARM_USER,
+                "startup": "enabled",
+            },
+            SERVICE_VALKEY_LOGS: {
+                "override": "replace",
+                "summary": "Stream the Valkey log file to stdout for log forwarding",
+                "command": "tail -n0 -F /var/log/valkey/valkey.log",
+                "user": CHARM_USER,
+                "group": CHARM_USER,
+                "startup": "enabled",
+            },
+            SERVICE_SENTINEL_LOGS: {
+                "override": "replace",
+                "summary": "Stream the Sentinel log file to stdout for log forwarding",
+                "command": "tail -n0 -F /var/log/valkey/sentinel.log",
                 "user": CHARM_USER,
                 "group": CHARM_USER,
                 "startup": "enabled",
