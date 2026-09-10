@@ -28,6 +28,7 @@ azure-storage-blob = "^12.19"
 google-cloud-storage = "^3.13"
 # Imported directly by the GCS backend for requests.RequestException.
 requests = ">=2.22"
+cosl = ">=0.0.53"
 
 [tool.poetry.requires-plugins]
 poetry-plugin-export = ">=1.8"
@@ -35,6 +36,7 @@ poetry-plugin-export = ">=1.8"
 [tool.poetry.group.charm-libs.dependencies]
 # data_platform_libs/v0/data_interfaces.py
 ops = ">=2.0.0"
+cosl = ">=0.0.53"
 
 [tool.poetry.group.format]
 optional = true

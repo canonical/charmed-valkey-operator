@@ -18,6 +18,7 @@ from events.backup import BackupEvents
 from events.base_events import BaseEvents
 from events.external_clients import ExternalClientsEvents
 from events.ldap import LDAPEvents
+from events.observability import ObservabilityEvents
 from events.tls import TLSEvents
 from literals import CONTAINER, Substrate
 from managers.auth import AuthManager
@@ -88,6 +89,7 @@ class ValkeyCharm(ops.CharmBase):
         self.client_events = ExternalClientsEvents(self)
         self.backup_events = BackupEvents(self)
         self.ldap_events = LDAPEvents(self)
+        self.observability_events = ObservabilityEvents(self)
 
         self.framework.observe(self.restart_workload, self._on_restart_workload)
 

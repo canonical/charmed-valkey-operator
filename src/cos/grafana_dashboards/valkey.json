@@ -129,7 +129,7 @@
             "type": "prometheus",
             "uid": "${prometheusds}"
           },
-          "expr": "redis_instance_info{juju_model=~\"\", juju_model_uuid=~\"\", juju_application=~\"\", juju_unit=~\"\"} == 1",
+          "expr": "redis_instance_info{juju_model=~\"$juju_model\", juju_model_uuid=~\"$juju_model_uuid\", juju_application=~\"$juju_application\", juju_unit=~\"$juju_unit\"} == 1",
           "format": "time_series",
           "legendFormat": "{{ juju_unit }}: {{ role }}",
           "refId": "A"
@@ -183,7 +183,7 @@
             "type": "prometheus",
             "uid": "${prometheusds}"
           },
-          "expr": "redis_connected_slaves{juju_model=~\"\", juju_model_uuid=~\"\", juju_application=~\"\", juju_unit=~\"\"}",
+          "expr": "redis_connected_slaves{juju_model=~\"$juju_model\", juju_model_uuid=~\"$juju_model_uuid\", juju_application=~\"$juju_application\", juju_unit=~\"$juju_unit\"}",
           "format": "time_series",
           "legendFormat": "{{ juju_unit }} replicas",
           "refId": "A"
@@ -229,7 +229,7 @@
             "type": "prometheus",
             "uid": "${prometheusds}"
           },
-          "expr": "redis_master_last_io_seconds_ago{juju_model=~\"\", juju_model_uuid=~\"\", juju_application=~\"\", juju_unit=~\"\"}",
+          "expr": "redis_master_last_io_seconds_ago{juju_model=~\"$juju_model\", juju_model_uuid=~\"$juju_model_uuid\", juju_application=~\"$juju_application\", juju_unit=~\"$juju_unit\"}",
           "format": "time_series",
           "legendFormat": "{{ juju_unit }}",
           "refId": "A"
@@ -275,7 +275,7 @@
             "type": "prometheus",
             "uid": "${prometheusds}"
           },
-          "expr": "redis_master_repl_offset{juju_model=~\"\", juju_model_uuid=~\"\", juju_application=~\"\", juju_unit=~\"\"}",
+          "expr": "redis_master_repl_offset{juju_model=~\"$juju_model\", juju_model_uuid=~\"$juju_model_uuid\", juju_application=~\"$juju_application\", juju_unit=~\"$juju_unit\"}",
           "format": "time_series",
           "legendFormat": "{{ juju_unit }} repl offset",
           "refId": "A"
@@ -357,7 +357,7 @@
             "type": "prometheus",
             "uid": "${prometheusds}"
           },
-          "expr": "max(max_over_time(redis_uptime_in_seconds{namespace=~\"$namespace\", instance=~\"$instance\"}[$__interval]))",
+          "expr": "max(max_over_time(redis_uptime_in_seconds{juju_model=~\"$juju_model\", juju_model_uuid=~\"$juju_model_uuid\", juju_application=~\"$juju_application\", juju_unit=~\"$juju_unit\"}[$__interval]))",
           "format": "time_series",
           "interval": "",
           "intervalFactor": 2,
@@ -444,7 +444,7 @@
             "type": "prometheus",
             "uid": "${prometheusds}"
           },
-          "expr": "sum(redis_connected_clients{namespace=~\"$namespace\", instance=~\"$instance\"})",
+          "expr": "sum(redis_connected_clients{juju_model=~\"$juju_model\", juju_model_uuid=~\"$juju_model_uuid\", juju_application=~\"$juju_application\", juju_unit=~\"$juju_unit\"})",
           "format": "time_series",
           "intervalFactor": 2,
           "legendFormat": "",
@@ -535,7 +535,7 @@
             "type": "prometheus",
             "uid": "${prometheusds}"
           },
-          "expr": "sum(100 * (redis_memory_used_bytes{namespace=~\"$namespace\", instance=~\"$instance\"}  / redis_memory_max_bytes{namespace=~\"$namespace\", instance=~\"$instance\"}))",
+          "expr": "sum(100 * (redis_memory_used_bytes{juju_model=~\"$juju_model\", juju_model_uuid=~\"$juju_model_uuid\", juju_application=~\"$juju_application\", juju_unit=~\"$juju_unit\"} / (redis_memory_max_bytes{juju_model=~\"$juju_model\", juju_model_uuid=~\"$juju_model_uuid\", juju_application=~\"$juju_application\", juju_unit=~\"$juju_unit\"} > 0 or redis_total_system_memory_bytes{juju_model=~\"$juju_model\", juju_model_uuid=~\"$juju_model_uuid\", juju_application=~\"$juju_application\", juju_unit=~\"$juju_unit\"})))",
           "format": "time_series",
           "intervalFactor": 2,
           "legendFormat": "",
@@ -637,7 +637,7 @@
             "type": "prometheus",
             "uid": "${prometheusds}"
           },
-          "expr": "sum(rate(redis_commands_total{namespace=~\"$namespace\", instance=~\"$instance\"} [1m])) by (cmd)",
+          "expr": "sum(rate(redis_commands_total{juju_model=~\"$juju_model\", juju_model_uuid=~\"$juju_model_uuid\", juju_application=~\"$juju_application\", juju_unit=~\"$juju_unit\"}[5m])) by (cmd)",
           "format": "time_series",
           "interval": "",
           "intervalFactor": 2,
@@ -740,7 +740,7 @@
             "type": "prometheus",
             "uid": "${prometheusds}"
           },
-          "expr": "irate(redis_keyspace_hits_total{instance=~\"$instance\"}[5m])",
+          "expr": "irate(redis_keyspace_hits_total{juju_model=~\"$juju_model\", juju_model_uuid=~\"$juju_model_uuid\", juju_application=~\"$juju_application\", juju_unit=~\"$juju_unit\"}[5m])",
           "format": "time_series",
           "hide": false,
           "interval": "",
@@ -756,7 +756,7 @@
             "type": "prometheus",
             "uid": "${prometheusds}"
           },
-          "expr": "irate(redis_keyspace_misses_total{instance=~\"$instance\"}[5m])",
+          "expr": "irate(redis_keyspace_misses_total{juju_model=~\"$juju_model\", juju_model_uuid=~\"$juju_model_uuid\", juju_application=~\"$juju_application\", juju_unit=~\"$juju_unit\"}[5m])",
           "format": "time_series",
           "hide": false,
           "interval": "",
@@ -877,7 +877,7 @@
             "type": "prometheus",
             "uid": "${prometheusds}"
           },
-          "expr": "redis_memory_used_bytes{instance=~\"$instance\"}",
+          "expr": "redis_memory_used_bytes{juju_model=~\"$juju_model\", juju_model_uuid=~\"$juju_model_uuid\", juju_application=~\"$juju_application\", juju_unit=~\"$juju_unit\"}",
           "format": "time_series",
           "intervalFactor": 2,
           "legendFormat": "used, {{ juju_unit }}",
@@ -891,7 +891,7 @@
             "type": "prometheus",
             "uid": "${prometheusds}"
           },
-          "expr": "redis_memory_max_bytes{instance=~\"$instance\"}",
+          "expr": "redis_memory_max_bytes{juju_model=~\"$juju_model\", juju_model_uuid=~\"$juju_model_uuid\", juju_application=~\"$juju_application\", juju_unit=~\"$juju_unit\"}",
           "format": "time_series",
           "hide": false,
           "intervalFactor": 2,
@@ -992,7 +992,7 @@
             "type": "prometheus",
             "uid": "${prometheusds}"
           },
-          "expr": "sum(rate(redis_net_input_bytes_total{instance=~\"$instance\"}[5m]))",
+          "expr": "sum(rate(redis_net_input_bytes_total{juju_model=~\"$juju_model\", juju_model_uuid=~\"$juju_model_uuid\", juju_application=~\"$juju_application\", juju_unit=~\"$juju_unit\"}[5m]))",
           "format": "time_series",
           "intervalFactor": 2,
           "legendFormat": "{{ input }}",
@@ -1004,7 +1004,7 @@
             "type": "prometheus",
             "uid": "${prometheusds}"
           },
-          "expr": "sum(rate(redis_net_output_bytes_total{instance=~\"$instance\"}[5m]))",
+          "expr": "sum(rate(redis_net_output_bytes_total{juju_model=~\"$juju_model\", juju_model_uuid=~\"$juju_model_uuid\", juju_application=~\"$juju_application\", juju_unit=~\"$juju_unit\"}[5m]))",
           "format": "time_series",
           "interval": "",
           "intervalFactor": 2,
@@ -1128,7 +1128,7 @@
             "type": "prometheus",
             "uid": "${prometheusds}"
           },
-          "expr": "sum (redis_db_keys{instance=~\"$instance\"}) by (db, instance)",
+          "expr": "sum (redis_db_keys{juju_model=~\"$juju_model\", juju_model_uuid=~\"$juju_model_uuid\", juju_application=~\"$juju_application\", juju_unit=~\"$juju_unit\"}) by (db, instance)",
           "format": "time_series",
           "interval": "",
           "intervalFactor": 2,
@@ -1230,7 +1230,7 @@
             "type": "prometheus",
             "uid": "${prometheusds}"
           },
-          "expr": "sum (redis_db_keys{instance=~\"$instance\"}) by (juju_unit) - sum (redis_db_keys_expiring{instance=~\"$instance\"}) by (juju_unit)",
+          "expr": "sum (redis_db_keys{juju_model=~\"$juju_model\", juju_model_uuid=~\"$juju_model_uuid\", juju_application=~\"$juju_application\", juju_unit=~\"$juju_unit\"}) by (juju_unit) - sum (redis_db_keys_expiring{juju_model=~\"$juju_model\", juju_model_uuid=~\"$juju_model_uuid\", juju_application=~\"$juju_application\", juju_unit=~\"$juju_unit\"}) by (juju_unit)",
           "format": "time_series",
           "interval": "",
           "intervalFactor": 2,
@@ -1244,7 +1244,7 @@
             "type": "prometheus",
             "uid": "${prometheusds}"
           },
-          "expr": "sum (redis_db_keys_expiring{instance=~\"$instance\"}) by (juju_unit)",
+          "expr": "sum (redis_db_keys_expiring{juju_model=~\"$juju_model\", juju_model_uuid=~\"$juju_model_uuid\", juju_application=~\"$juju_application\", juju_unit=~\"$juju_unit\"}) by (juju_unit)",
           "format": "time_series",
           "interval": "",
           "intervalFactor": 2,
@@ -1391,7 +1391,7 @@
             "type": "prometheus",
             "uid": "${prometheusds}"
           },
-          "expr": "sum(rate(redis_expired_keys_total{instance=~\"$instance\"}[5m])) by (juju_unit)",
+          "expr": "sum(rate(redis_expired_keys_total{juju_model=~\"$juju_model\", juju_model_uuid=~\"$juju_model_uuid\", juju_application=~\"$juju_application\", juju_unit=~\"$juju_unit\"}[5m])) by (juju_unit)",
           "format": "time_series",
           "hide": false,
           "interval": "",
@@ -1407,7 +1407,7 @@
             "type": "prometheus",
             "uid": "${prometheusds}"
           },
-          "expr": "sum(rate(redis_evicted_keys_total{instance=~\"$instance\"}[5m])) by (juju_unit)",
+          "expr": "sum(rate(redis_evicted_keys_total{juju_model=~\"$juju_model\", juju_model_uuid=~\"$juju_model_uuid\", juju_application=~\"$juju_application\", juju_unit=~\"$juju_unit\"}[5m])) by (juju_unit)",
           "format": "time_series",
           "interval": "",
           "intervalFactor": 2,
@@ -1507,7 +1507,7 @@
             "type": "prometheus",
             "uid": "${prometheusds}"
           },
-          "expr": "sum(redis_connected_clients{instance=~\"$instance\"})",
+          "expr": "sum(redis_connected_clients{juju_model=~\"$juju_model\", juju_model_uuid=~\"$juju_model_uuid\", juju_application=~\"$juju_application\", juju_unit=~\"$juju_unit\"})",
           "format": "time_series",
           "intervalFactor": 1,
           "legendFormat": "connected",
@@ -1518,7 +1518,7 @@
             "type": "prometheus",
             "uid": "${prometheusds}"
           },
-          "expr": "sum(redis_blocked_clients{instance=~\"$instance\"})",
+          "expr": "sum(redis_blocked_clients{juju_model=~\"$juju_model\", juju_model_uuid=~\"$juju_model_uuid\", juju_application=~\"$juju_application\", juju_unit=~\"$juju_unit\"})",
           "format": "time_series",
           "intervalFactor": 1,
           "legendFormat": "blocked",
@@ -1637,7 +1637,7 @@
             "type": "prometheus",
             "uid": "${prometheusds}"
           },
-          "expr": "sum(irate(redis_commands_duration_seconds_total{namespace=~\"$namespace\", instance =~ \"$instance\"}[1m])) by (cmd)\n  /\nsum(irate(redis_commands_total{namespace=~\"$namespace\", instance =~ \"$instance\"}[1m])) by (cmd)\n",
+          "expr": "sum(irate(redis_commands_duration_seconds_total{juju_model=~\"$juju_model\", juju_model_uuid=~\"$juju_model_uuid\", juju_application=~\"$juju_application\", juju_unit=~\"$juju_unit\"}[5m])) by (cmd)\n  /\nsum(irate(redis_commands_total{juju_model=~\"$juju_model\", juju_model_uuid=~\"$juju_model_uuid\", juju_application=~\"$juju_application\", juju_unit=~\"$juju_unit\"}[5m])) by (cmd)\n",
           "format": "time_series",
           "interval": "",
           "intervalFactor": 2,
@@ -1738,7 +1738,7 @@
             "type": "prometheus",
             "uid": "${prometheusds}"
           },
-          "expr": "sum(irate(redis_commands_duration_seconds_total{instance=~\"$instance\"}[1m])) by (cmd) != 0",
+          "expr": "sum(irate(redis_commands_duration_seconds_total{juju_model=~\"$juju_model\", juju_model_uuid=~\"$juju_model_uuid\", juju_application=~\"$juju_application\", juju_unit=~\"$juju_unit\"}[5m])) by (cmd) != 0",
           "format": "time_series",
           "interval": "",
           "intervalFactor": 2,
@@ -1792,7 +1792,10 @@
         "multi": false,
         "name": "juju_model",
         "options": [],
-        "query": "label_values(redis_up, juju_model)",
+        "query": {
+          "query": "label_values(redis_up, juju_model)",
+          "refId": "StandardVariableQuery"
+        },
         "refresh": 1,
         "regex": "",
         "sort": 1,
@@ -1805,14 +1808,17 @@
           "type": "prometheus",
           "uid": "${prometheusds}"
         },
-        "definition": "label_values(redis_up{juju_model=~\"\"}, juju_model_uuid)",
+        "definition": "label_values(redis_up{juju_model=~\"$juju_model\"}, juju_model_uuid)",
         "hide": 0,
         "includeAll": false,
         "label": "Model UUID",
         "multi": false,
         "name": "juju_model_uuid",
         "options": [],
-        "query": "label_values(redis_up{juju_model=~\"\"}, juju_model_uuid)",
+        "query": {
+          "query": "label_values(redis_up{juju_model=~\"$juju_model\"}, juju_model_uuid)",
+          "refId": "StandardVariableQuery"
+        },
         "refresh": 1,
         "regex": "",
         "sort": 1,
@@ -1825,14 +1831,17 @@
           "type": "prometheus",
           "uid": "${prometheusds}"
         },
-        "definition": "label_values(redis_up{juju_model=~\"\", juju_model_uuid=~\"\"}, juju_application)",
+        "definition": "label_values(redis_up{juju_model=~\"$juju_model\", juju_model_uuid=~\"$juju_model_uuid\"}, juju_application)",
         "hide": 0,
         "includeAll": false,
         "label": "Juju application",
         "multi": false,
         "name": "juju_application",
         "options": [],
-        "query": "label_values(redis_up{juju_model=~\"\", juju_model_uuid=~\"\"}, juju_application)",
+        "query": {
+          "query": "label_values(redis_up{juju_model=~\"$juju_model\", juju_model_uuid=~\"$juju_model_uuid\"}, juju_application)",
+          "refId": "StandardVariableQuery"
+        },
         "refresh": 1,
         "regex": "",
         "sort": 1,
@@ -1845,14 +1854,17 @@
           "type": "prometheus",
           "uid": "${prometheusds}"
         },
-        "definition": "label_values(redis_up{juju_model=~\"\", juju_model_uuid=~\"\", juju_application=~\"\"}, juju_unit)",
+        "definition": "label_values(redis_up{juju_model=~\"$juju_model\", juju_model_uuid=~\"$juju_model_uuid\", juju_application=~\"$juju_application\"}, juju_unit)",
         "hide": 0,
         "includeAll": true,
         "label": "Juju unit",
         "multi": true,
         "name": "juju_unit",
         "options": [],
-        "query": "label_values(redis_up{juju_model=~\"\", juju_model_uuid=~\"\", juju_application=~\"\"}, juju_unit)",
+        "query": {
+          "query": "label_values(redis_up{juju_model=~\"$juju_model\", juju_model_uuid=~\"$juju_model_uuid\", juju_application=~\"$juju_application\"}, juju_unit)",
+          "refId": "StandardVariableQuery"
+        },
         "refresh": 1,
         "regex": "",
         "sort": 1,

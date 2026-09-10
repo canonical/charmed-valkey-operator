@@ -23,6 +23,11 @@ SNAP_ACL_FILE = "etc/valkey/users.acl"
 SNAP_SENTINEL_ACL_FILE = "etc/valkey/sentinel-users.acl"
 METRICS_EXPORTER_ENV_FILE = "etc/valkey/metrics-exporter.env"
 
+COS_DIR = "src/cos"
+METRICS_RULES_DIR = f"{COS_DIR}/alert_rules/prometheus"
+LOGS_RULES_DIR = f"{COS_DIR}/alert_rules/loki"
+DASHBOARDS_DIR = f"{COS_DIR}/grafana_dashboards"
+
 CONFIG_FILE = "var/lib/valkey/valkey.conf"
 SENTINEL_CONFIG_FILE = "var/lib/valkey/sentinel.conf"
 ACL_FILE = "var/lib/valkey/users.acl"
@@ -39,9 +44,15 @@ CERTIFICATE_TRANSFER_RELATION = "certificate-transfer"
 LDAP_CA_CERT_RELATION = "ldap-ca-cert"
 LDAP_RELATION = "ldap"
 EXTERNAL_CLIENTS_RELATION = "valkey-client"
+METRICS_ENDPOINT_RELATION = "metrics-endpoint"
+GRAFANA_DASHBOARD_RELATION = "grafana-dashboard"
+LOGGING_RELATION = "logging"
 S3_RELATION_NAME = "s3-credentials"
 AZURE_RELATION_NAME = "azure-credentials"
 GCS_RELATION_NAME = "gcs-credentials"
+
+VALKEY_LOGS_SERVICE = "valkey-logs"
+SENTINEL_LOGS_SERVICE = "sentinel-logs"
 # azure-storage-integrator connection-protocol values that designate an https/http
 # Blob endpoint. abfs/abfss designate ADLS-Gen2 (*.dfs.*), served by the datalake
 # SDK rather than the Blob SDK, so they are rejected up front.

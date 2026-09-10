@@ -32,6 +32,10 @@ from literals import (
     METRICS_SERVICE,
     SENTINEL_ACL_FILE,
     SENTINEL_CONFIG_FILE,
+    SENTINEL_LOG_FILE,
+    SENTINEL_LOGS_SERVICE,
+    VALKEY_LOG_FILE,
+    VALKEY_LOGS_SERVICE,
 )
 
 logger = logging.getLogger(__name__)
@@ -128,6 +132,8 @@ class ValkeyK8sWorkload(WorkloadBase):
         self.valkey_service = "valkey"
         self.sentinel_service = "sentinel"
         self.metrics_service = METRICS_SERVICE
+        self.valkey_logs_service = VALKEY_LOGS_SERVICE
+        self.sentinel_logs_service = SENTINEL_LOGS_SERVICE
         self.cli = "valkey-cli"
         self.user = "_daemon_"
         self._metrics_env: dict[str, str] = {}
@@ -169,6 +175,22 @@ class ValkeyK8sWorkload(WorkloadBase):
                     "startup": "enabled",
                     "environment": self._metrics_env,
                 },
+                self.valkey_logs_service: {
+                    "override": "replace",
+                    "summary": "Stream the Valkey log file to stdout for log forwarding",
+                    "command": f"tail -n0 -F {(self.log_dir / VALKEY_LOG_FILE).as_posix()}",
+                    "user": self.user,
+                    "group": self.user,
+                    "startup": "enabled",
+                },
+                self.sentinel_logs_service: {
+                    "override": "replace",
+                    "summary": "Stream the Sentinel log file to stdout for log forwarding",
+                    "command": f"tail -n0 -F {(self.log_dir / SENTINEL_LOG_FILE).as_posix()}",
+                    "user": self.user,
+                    "group": self.user,
+                    "startup": "enabled",
+                },
             },
         }
         return pebble.Layer(layer_config)
@@ -181,7 +203,11 @@ class ValkeyK8sWorkload(WorkloadBase):
             else:
                 self.container.add_layer(CHARM, self.pebble_layer, combine=True)
                 self.container.restart(
-                    self.valkey_service, self.sentinel_service, self.metrics_service
+                    self.valkey_service,
+                    self.sentinel_service,
+                    self.metrics_service,
+                    self.valkey_logs_service,
+                    self.sentinel_logs_service,
                 )
         except (
             pebble.ChangeError,
@@ -313,7 +339,13 @@ class ValkeyK8sWorkload(WorkloadBase):
         targets = (
             (service,)
             if service
-            else (self.valkey_service, self.sentinel_service, self.metrics_service)
+            else (
+                self.valkey_service,
+                self.sentinel_service,
+                self.metrics_service,
+                self.valkey_logs_service,
+                self.sentinel_logs_service,
+            )
         )
         try:
             self.container.stop(*targets)
