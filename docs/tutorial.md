@@ -140,7 +140,7 @@ Unit       Workload  Agent  Address      Ports  Message
 valkey/0*  active    idle   10.1.44.126         
 ```
 
-You can also watch juju logs with the [`juju debug-log`](https://juju.is/docs/juju/juju-debug-log) command.
+You can also watch Juju logs with the [`juju debug-log`](https://juju.is/docs/juju/juju-debug-log) command.
 
 ## Access Valkey
 

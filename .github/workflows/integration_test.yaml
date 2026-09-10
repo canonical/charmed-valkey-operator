@@ -166,6 +166,9 @@ jobs:
         timeout-minutes: 75
         id: spread
         run: ~/go/bin/spread -vv -artifacts=artifacts '${{ matrix.job.spread_job }}'
+        env:
+          # Read on the runner by spread.yaml's `$(HOST: ...)` pass-through.
+          GCS_SERVICE_ACCOUNT: ${{ secrets.GCS_SERVICE_ACCOUNT }}
       - name: Upload Allure results
         timeout-minutes: 3
         # Only upload results from one spread system & one spread variant

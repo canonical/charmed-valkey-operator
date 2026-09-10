@@ -140,17 +140,6 @@ class ValkeyK8sWorkload(WorkloadBase):
     @property
     def pebble_layer(self) -> pebble.Layer:
         """Create the Pebble configuration layer for Valkey."""
-        metrics_service_def: pebble.ServiceDict = {
-            "override": "replace",
-            "summary": "Valkey metric exporter",
-            "command": "prometheus-redis-exporter",
-            "user": self.user,
-            "group": self.user,
-            "startup": "enabled",
-        }
-        if self._metrics_env:
-            metrics_service_def["environment"] = self._metrics_env
-
         layer_config: pebble.LayerDict = {
             "summary": "Valkey layer",
             "description": "Valkey layer",
@@ -171,7 +160,15 @@ class ValkeyK8sWorkload(WorkloadBase):
                     "group": self.user,
                     "startup": "enabled",
                 },
-                self.metrics_service: metrics_service_def,
+                self.metrics_service: {
+                    "override": "replace",
+                    "summary": "Valkey metric exporter",
+                    "command": "prometheus-redis-exporter",
+                    "user": self.user,
+                    "group": self.user,
+                    "startup": "enabled",
+                    "environment": self._metrics_env,
+                },
             },
         }
         return pebble.Layer(layer_config)

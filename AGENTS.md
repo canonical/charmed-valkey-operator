@@ -10,7 +10,8 @@ A [Juju](https://juju.is) charm (Charmhub: `valkey`, track `9/edge`) that deploy
 [Valkey](https://valkey.io) — a Redis-compatible key-value store — in **both Kubernetes and VM/bare-metal**
 environments from a single codebase. HA is provided by Valkey **Sentinel** (primary/replica with automatic
 failover). Built with the `ops` framework following Canonical's Data Platform charm architecture.
-The substrate (VM vs K8s) is detected at runtime in `charm.py` via `self.model.get_cloud_spec()`.
+The substrate (VM vs K8s) is detected at runtime in `charm.py` via the `KUBERNETES_SERVICE_HOST`
+environment variable.
 
 ## Hard rules (NEVER)
 
@@ -199,8 +200,8 @@ Any code touching addresses, file paths, services, or networking must handle bot
   bare loops.
 - Unit tests use `ops.testing` Scenario (`Context`, `State`, `Container`, `PeerRelation`,
   `Secret`) — not the legacy `Harness`. External effects are mocked autouse in
-  `tests/unit/conftest.py`; pick the substrate via the `cloud_spec` (K8s) / `cloud_spec_vm`
-  fixtures; assert statuses with `tests/unit/helpers.py::status_is`.
+  `tests/unit/conftest.py`; tests simulate K8s by default via `k8s_environment` or pick VM via the
+  `vm_environment` fixture; assert statuses with `tests/unit/helpers.py::status_is`.
 - User-facing behavior changes (ports, relations, TLS flow) → update the matching
   `docs/how-to/*.md` (Sphinx/Diátaxis, published to Read the Docs).
 
@@ -215,11 +216,10 @@ Any code touching addresses, file paths, services, or networking must handle bot
 
 ## Gotchas
 
-- `--trust` is mandatory (cloud-spec lookup at init raises without it; K8s also patches
-  Services/pods). It grants cloud-admin credentials: only ever target a local, throwaway
-  controller/model; never run destructive `juju`/`kubectl` commands (destroy-model,
-  remove-application, delete) against a controller you did not create without explicit user
-  confirmation.
+- `--trust` is mandatory on K8s (K8s patches Services/pods via lightkube). It grants cloud-admin
+  credentials: only ever target a local, throwaway controller/model; never run destructive
+  `juju`/`kubectl` commands (destroy-model, remove-application, delete) against a controller you did
+  not create without explicit user confirmation.
 - Base is Ubuntu 24.04; both amd64 and arm64 platforms build (`charmcraft.yaml`) — ARM integration
   tests are still a TODO. Channel is `9/edge`.
 - Always invoke a specific env (`tox run -e <env>`); bare `tox` errors on an undefined `static` env

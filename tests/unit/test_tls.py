@@ -39,7 +39,7 @@ METADATA = yaml.safe_load(Path("./metadata.yaml").read_text())
 APP_NAME = METADATA["name"]
 
 
-def test_client_tls_relation_created(cloud_spec):
+def test_client_tls_relation_created():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -54,14 +54,14 @@ def test_client_tls_relation_created(cloud_spec):
         leader=True,
         relations={peer_relation, status_peer_relation, client_tls_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     state_out = ctx.run(ctx.on.relation_created(relation=client_tls_relation), state_in)
     assert status_is(state_out, TLSStatuses.ENABLING_CLIENT_TLS.value)
 
 
-def test_enable_internal_tls_by_default(cloud_spec):
+def test_enable_internal_tls_by_default():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(id=1, endpoint=PEER_RELATION)
     status_peer_relation = testing.PeerRelation(id=2, endpoint=STATUS_PEERS_RELATION)
@@ -71,7 +71,7 @@ def test_enable_internal_tls_by_default(cloud_spec):
         leader=True,
         relations={peer_relation, status_peer_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with patch("charmlibs.pathops.ContainerPath.mkdir"):
@@ -83,7 +83,7 @@ def test_enable_internal_tls_by_default(cloud_spec):
         assert secret_out.latest_content.get("internal-ca-private-key")
 
 
-def test_enable_internal_tls_no_ca_cert_available(cloud_spec):
+def test_enable_internal_tls_no_ca_cert_available():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(id=1, endpoint=PEER_RELATION)
     status_peer_relation = testing.PeerRelation(id=2, endpoint=STATUS_PEERS_RELATION)
@@ -93,7 +93,7 @@ def test_enable_internal_tls_no_ca_cert_available(cloud_spec):
         leader=False,
         relations={peer_relation, status_peer_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
     with patch("managers.tls.TLSManager.create_and_store_self_signed_certificate") as create_certs:
         state_out = ctx.run(ctx.on.relation_created(relation=peer_relation), state_in)
@@ -101,7 +101,7 @@ def test_enable_internal_tls_no_ca_cert_available(cloud_spec):
         assert "valkey_peers_relation_created" in [e.name for e in state_out.deferred]
 
 
-def test_client_tls_relation_broken(cloud_spec):
+def test_client_tls_relation_broken():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -121,7 +121,7 @@ def test_client_tls_relation_broken(cloud_spec):
         leader=True,
         relations={peer_relation, status_peer_relation, client_tls_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with (
@@ -146,7 +146,7 @@ def test_client_tls_relation_broken(cloud_spec):
         assert secret_out.latest_content.get("internal-ca-private-key")
 
 
-def test_client_tls_relation_broken_disabling_tls_fails(cloud_spec):
+def test_client_tls_relation_broken_disabling_tls_fails():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -165,7 +165,7 @@ def test_client_tls_relation_broken_disabling_tls_fails(cloud_spec):
         leader=True,
         relations={peer_relation, status_peer_relation, client_tls_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with (
@@ -187,7 +187,7 @@ def test_client_tls_relation_broken_disabling_tls_fails(cloud_spec):
         assert state_out.get_relation(1).local_unit_data.get("tls-client-state") == "to-no-tls"
 
 
-def test_client_tls_relation_broken_no_internal_ca_cert_available(cloud_spec):
+def test_client_tls_relation_broken_no_internal_ca_cert_available():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -206,7 +206,7 @@ def test_client_tls_relation_broken_no_internal_ca_cert_available(cloud_spec):
         leader=False,
         relations={peer_relation, status_peer_relation, client_tls_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with (
@@ -219,7 +219,7 @@ def test_client_tls_relation_broken_no_internal_ca_cert_available(cloud_spec):
         assert state_out.get_relation(1).local_unit_data.get("tls-client-state") == "tls"
 
 
-def test_client_tls_relation_broken_writing_internal_cert_fails(cloud_spec):
+def test_client_tls_relation_broken_writing_internal_cert_fails():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -238,7 +238,7 @@ def test_client_tls_relation_broken_writing_internal_cert_fails(cloud_spec):
         leader=True,
         relations={peer_relation, status_peer_relation, client_tls_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with (
@@ -258,7 +258,7 @@ def test_client_tls_relation_broken_writing_internal_cert_fails(cloud_spec):
         assert state_out.get_relation(1).local_unit_data.get("tls-client-state") == "no-tls"
 
 
-def test_client_certificate_denied(cloud_spec):
+def test_client_certificate_denied():
     csr = MagicMock("my_csr")
 
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
@@ -283,7 +283,7 @@ def test_client_certificate_denied(cloud_spec):
         leader=True,
         relations={peer_relation, status_peer_relation, client_tls_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
     with ctx(ctx.on.update_status(), state_in) as manager:
         charm: ValkeyCharm = manager.charm
@@ -304,7 +304,7 @@ def test_client_certificate_denied(cloud_spec):
             status_is(state_out, TLSStatuses.CERTIFICATE_DENIED.value)
 
 
-def test_client_certificate_available(cloud_spec):
+def test_client_certificate_available():
     ca = MagicMock("my_ca")
     ca.raw = "my_ca"
     csr = MagicMock("my_csr")
@@ -331,7 +331,7 @@ def test_client_certificate_available(cloud_spec):
         leader=True,
         relations={peer_relation, status_peer_relation, client_tls_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
     with ctx(ctx.on.update_status(), state_in) as manager:
         charm: ValkeyCharm = manager.charm
@@ -360,7 +360,7 @@ def test_client_certificate_available(cloud_spec):
             assert state_out.get_relation(1).local_unit_data.get("tls-client-state") == "tls"
 
 
-def test_client_certificate_available_enabling_fails(cloud_spec):
+def test_client_certificate_available_enabling_fails():
     ca = MagicMock("my_ca")
     csr = MagicMock("my_csr")
     cert = MagicMock("my_cert")
@@ -384,7 +384,7 @@ def test_client_certificate_available_enabling_fails(cloud_spec):
         leader=True,
         relations={peer_relation, status_peer_relation, client_tls_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
     with ctx(ctx.on.update_status(), state_in) as manager:
         charm: ValkeyCharm = manager.charm
@@ -416,7 +416,7 @@ def test_client_certificate_available_enabling_fails(cloud_spec):
             assert state_out.get_relation(1).local_unit_data.get("tls-client-state") == "to-tls"
 
 
-def test_client_certificate_available_not_all_units_ready(cloud_spec):
+def test_client_certificate_available_not_all_units_ready():
     ca = MagicMock("my_ca")
     client_csr = MagicMock("my_csr")
     client_cert = MagicMock("my_cert")
@@ -450,7 +450,7 @@ def test_client_certificate_available_not_all_units_ready(cloud_spec):
         relations={peer_relation, status_peer_relation, client_tls_relation},
         planned_units=2,
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
     with ctx(ctx.on.update_status(), state_in) as manager:
         charm: ValkeyCharm = manager.charm
@@ -474,7 +474,7 @@ def test_client_certificate_available_not_all_units_ready(cloud_spec):
             assert state_out.get_relation(1).local_unit_data.get("tls-client-state") == "to-tls"
 
 
-def test_check_certificate_expiration(cloud_spec):
+def test_check_certificate_expiration():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -489,7 +489,7 @@ def test_check_certificate_expiration(cloud_spec):
         leader=True,
         relations={peer_relation, status_peer_relation, client_tls_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     # exec returns (stdout, stderr); the openssl -checkend path only cares that it
@@ -513,7 +513,7 @@ def test_check_certificate_expiration(cloud_spec):
         assert status_is(state_out, TLSStatuses.CERTIFICATE_EXPIRING.value)
 
 
-def test_client_certificate_renewed(cloud_spec):
+def test_client_certificate_renewed():
     # Mock the certificate values that are in the relation databag otherwise
     ca = MagicMock("my_ca")
     ca.raw = "my_ca"
@@ -543,7 +543,7 @@ def test_client_certificate_renewed(cloud_spec):
         leader=True,
         relations={peer_relation, status_peer_relation, client_tls_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
     with ctx(ctx.on.update_status(), state_in) as manager:
         charm: ValkeyCharm = manager.charm
@@ -578,7 +578,7 @@ def test_client_certificate_renewed(cloud_spec):
             )
 
 
-def test_certificate_re_emitted_unchanged_skips_restart(cloud_spec):
+def test_certificate_re_emitted_unchanged_skips_restart():
     # The tls lib re-emits certificate-available for an unchanged certificate on
     # every relation-changed of the client-certificates relation (shared across
     # units, so every peer's renewal fires it); an already-applied certificate
@@ -613,7 +613,7 @@ def test_certificate_re_emitted_unchanged_skips_restart(cloud_spec):
         leader=True,
         relations={peer_relation, status_peer_relation, client_tls_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
     with ctx(ctx.on.update_status(), state_in) as manager:
         charm: ValkeyCharm = manager.charm
@@ -643,7 +643,7 @@ def test_certificate_re_emitted_unchanged_skips_restart(cloud_spec):
             event.defer.assert_not_called()
 
 
-def test_failed_tls_reload_does_not_record_fingerprint(cloud_spec):
+def test_failed_tls_reload_does_not_record_fingerprint():
     # A deferred apply must stay retryable: the fingerprint is only recorded
     # once reload+restart has been handed off, so a redelivered event after a
     # failed reload still does the work instead of being skipped.
@@ -672,7 +672,7 @@ def test_failed_tls_reload_does_not_record_fingerprint(cloud_spec):
         leader=True,
         relations={peer_relation, status_peer_relation, client_tls_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
     with ctx(ctx.on.update_status(), state_in) as manager:
         charm: ValkeyCharm = manager.charm
@@ -707,7 +707,7 @@ def test_failed_tls_reload_does_not_record_fingerprint(cloud_spec):
             )
 
 
-def test_new_client_ca_single_unit(cloud_spec):
+def test_new_client_ca_single_unit():
     # Mock the certificate values that are in the relation databag otherwise
     ca = MagicMock("my_new_ca")
     ca.raw = "my_new_ca"
@@ -737,7 +737,7 @@ def test_new_client_ca_single_unit(cloud_spec):
         leader=True,
         relations={peer_relation, status_peer_relation, client_tls_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
     with ctx(ctx.on.update_status(), state_in) as manager:
         charm: ValkeyCharm = manager.charm
@@ -771,7 +771,7 @@ def test_new_client_ca_single_unit(cloud_spec):
             )
 
 
-def test_new_client_ca_rotation_started(cloud_spec):
+def test_new_client_ca_rotation_started():
     # Mock the certificate values that are in the relation databag otherwise
     ca = MagicMock("my_new_ca")
     ca.raw = "my_new_ca"
@@ -802,7 +802,7 @@ def test_new_client_ca_rotation_started(cloud_spec):
         leader=True,
         relations={peer_relation, status_peer_relation, client_tls_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
     with ctx(ctx.on.update_status(), state_in) as manager:
         charm: ValkeyCharm = manager.charm
@@ -834,7 +834,7 @@ def test_new_client_ca_rotation_started(cloud_spec):
             )
 
 
-def test_internal_peer_ca_rotation_single_unit(cloud_spec):
+def test_internal_peer_ca_rotation_single_unit():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -847,7 +847,7 @@ def test_internal_peer_ca_rotation_single_unit(cloud_spec):
         leader=True,
         relations={peer_relation, status_peer_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with (
@@ -875,7 +875,7 @@ def test_internal_peer_ca_rotation_single_unit(cloud_spec):
         )
 
 
-def test_internal_peer_ca_rotation_started(cloud_spec):
+def test_internal_peer_ca_rotation_started():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -889,7 +889,7 @@ def test_internal_peer_ca_rotation_started(cloud_spec):
         leader=True,
         relations={peer_relation, status_peer_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with (
@@ -917,7 +917,7 @@ def test_internal_peer_ca_rotation_started(cloud_spec):
         )
 
 
-def test_ca_rotation_not_all_units_added(cloud_spec):
+def test_ca_rotation_not_all_units_added():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -945,7 +945,7 @@ def test_ca_rotation_not_all_units_added(cloud_spec):
         relations={peer_relation, status_peer_relation, client_tls_relation},
         containers={container},
         planned_units=2,
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
     with (
         patch("managers.cluster.ClusterManager.reload_tls_settings") as reload_tls,
@@ -961,7 +961,7 @@ def test_ca_rotation_not_all_units_added(cloud_spec):
         )
 
 
-def test_ca_rotation_all_units_added(cloud_spec):
+def test_ca_rotation_all_units_added():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -990,7 +990,7 @@ def test_ca_rotation_all_units_added(cloud_spec):
         relations={peer_relation, status_peer_relation, client_tls_relation},
         containers={container},
         planned_units=2,
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
     with (
         patch("managers.cluster.ClusterManager.reload_tls_settings") as reload_tls,
@@ -1007,7 +1007,7 @@ def test_ca_rotation_all_units_added(cloud_spec):
         )
 
 
-def test_ca_rotation_not_all_units_ca_updated(cloud_spec):
+def test_ca_rotation_not_all_units_ca_updated():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -1036,7 +1036,7 @@ def test_ca_rotation_not_all_units_ca_updated(cloud_spec):
         relations={peer_relation, status_peer_relation, client_tls_relation},
         containers={container},
         planned_units=2,
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
     with (
         patch("managers.cluster.ClusterManager.reload_tls_settings") as reload_tls,
@@ -1052,7 +1052,7 @@ def test_ca_rotation_not_all_units_ca_updated(cloud_spec):
         )
 
 
-def test_ca_rotation_all_units_ca_updated(cloud_spec):
+def test_ca_rotation_all_units_ca_updated():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -1081,7 +1081,7 @@ def test_ca_rotation_all_units_ca_updated(cloud_spec):
         relations={peer_relation, status_peer_relation, client_tls_relation},
         containers={container},
         planned_units=2,
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
     with (
         patch("managers.cluster.ClusterManager.reload_tls_settings") as reload_tls,
@@ -1099,7 +1099,7 @@ def test_ca_rotation_all_units_ca_updated(cloud_spec):
         )
 
 
-def test_private_key_without_client_tls(cloud_spec):
+def test_private_key_without_client_tls():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -1121,7 +1121,7 @@ def test_private_key_without_client_tls(cloud_spec):
         secrets={secret},
         config={TLS_CLIENT_PRIVATE_KEY_CONFIG: secret.id},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     state_out = ctx.run(ctx.on.config_changed(), state_in)
@@ -1130,7 +1130,7 @@ def test_private_key_without_client_tls(cloud_spec):
     assert status_is(state_out, TLSStatuses.PRIVATE_KEY_BUT_NO_TLS.value)
 
 
-def test_invalid_private_key(cloud_spec):
+def test_invalid_private_key():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -1156,7 +1156,7 @@ def test_invalid_private_key(cloud_spec):
         secrets={secret},
         config={TLS_CLIENT_PRIVATE_KEY_CONFIG: secret.id},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with patch("workload_k8s.ValkeyK8sWorkload.exec"):
@@ -1167,7 +1167,7 @@ def test_invalid_private_key(cloud_spec):
         assert status_is(state_out, TLSStatuses.PRIVATE_KEY_INVALID.value)
 
 
-def test_private_key_refreshes_certificate(cloud_spec):
+def test_private_key_refreshes_certificate():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -1193,7 +1193,7 @@ def test_private_key_refreshes_certificate(cloud_spec):
         secrets={user_secret},
         config={TLS_CLIENT_PRIVATE_KEY_CONFIG: user_secret.id},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with patch("workload_k8s.ValkeyK8sWorkload.exec"):
@@ -1203,7 +1203,7 @@ def test_private_key_refreshes_certificate(cloud_spec):
         assert ctx.emitted_events[1].handle.kind == "refresh_tls_certificates_event"
 
 
-def test_private_key_secret_changed(cloud_spec):
+def test_private_key_secret_changed():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -1229,7 +1229,7 @@ def test_private_key_secret_changed(cloud_spec):
         secrets={user_secret},
         config={TLS_CLIENT_PRIVATE_KEY_CONFIG: user_secret.id},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     state_out = ctx.run(ctx.on.secret_changed(secret=user_secret), state_in)
@@ -1238,7 +1238,7 @@ def test_private_key_secret_changed(cloud_spec):
     assert ctx.emitted_events[1].handle.kind == "refresh_tls_certificates_event"
 
 
-def test_set_extra_sans_config_option(cloud_spec):
+def test_set_extra_sans_config_option():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -1256,7 +1256,7 @@ def test_set_extra_sans_config_option(cloud_spec):
         relations={peer_relation, status_peer_relation, client_tls_relation},
         config={"certificate-extra-sans": "192.168.1.100, myhostname"},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     current_sans_value = (
@@ -1272,7 +1272,7 @@ def test_set_extra_sans_config_option(cloud_spec):
         assert ctx.emitted_events[1].handle.kind == "refresh_tls_certificates_event"
 
 
-def test_set_extra_sans_config_option_unit_placeholder(cloud_spec):
+def test_set_extra_sans_config_option_unit_placeholder():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -1291,7 +1291,7 @@ def test_set_extra_sans_config_option_unit_placeholder(cloud_spec):
             "certificate-extra-sans": "192.168.1.100, valkey-{unit}.hostname",
         },
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     current_sans_value = (
@@ -1307,7 +1307,7 @@ def test_set_extra_sans_config_option_unit_placeholder(cloud_spec):
         assert ctx.emitted_events[1].handle.kind == "refresh_tls_certificates_event"
 
 
-def test_set_extra_sans_config_option_invalid_ip(cloud_spec):
+def test_set_extra_sans_config_option_invalid_ip():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -1324,7 +1324,7 @@ def test_set_extra_sans_config_option_invalid_ip(cloud_spec):
         relations={peer_relation, status_peer_relation, client_tls_relation},
         config={"certificate-extra-sans": "192.168.257.100, myhostname"},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     state_out = ctx.run(ctx.on.config_changed(), state_in)
@@ -1333,7 +1333,7 @@ def test_set_extra_sans_config_option_invalid_ip(cloud_spec):
     assert len(ctx.emitted_events) == 1
 
 
-def test_set_extra_sans_config_option_invalid_dns(cloud_spec):
+def test_set_extra_sans_config_option_invalid_dns():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -1350,7 +1350,7 @@ def test_set_extra_sans_config_option_invalid_dns(cloud_spec):
         relations={peer_relation, status_peer_relation, client_tls_relation},
         config={"certificate-extra-sans": "-myhostname"},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     state_out = ctx.run(ctx.on.config_changed(), state_in)
@@ -1359,7 +1359,7 @@ def test_set_extra_sans_config_option_invalid_dns(cloud_spec):
     assert len(ctx.emitted_events) == 1
 
 
-def test_set_extra_sans_config_option_special_chars(cloud_spec):
+def test_set_extra_sans_config_option_special_chars():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -1376,7 +1376,7 @@ def test_set_extra_sans_config_option_special_chars(cloud_spec):
         relations={peer_relation, status_peer_relation, client_tls_relation},
         config={"certificate-extra-sans": "192.168.1.100, my$*hostname"},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     state_out = ctx.run(ctx.on.config_changed(), state_in)
@@ -1385,7 +1385,7 @@ def test_set_extra_sans_config_option_special_chars(cloud_spec):
     assert len(ctx.emitted_events) == 1
 
 
-def test_set_extra_sans_config_option_no_update(cloud_spec):
+def test_set_extra_sans_config_option_no_update():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -1402,7 +1402,7 @@ def test_set_extra_sans_config_option_no_update(cloud_spec):
         relations={peer_relation, status_peer_relation, client_tls_relation},
         config={"certificate-extra-sans": "192.168.1.100, myhostname"},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     current_sans_value = (
@@ -1420,7 +1420,7 @@ def test_set_extra_sans_config_option_no_update(cloud_spec):
         assert len(ctx.emitted_events) == 1
 
 
-def test_client_tls_relation_broken_run_deferred_event(cloud_spec):
+def test_client_tls_relation_broken_run_deferred_event():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -1439,7 +1439,7 @@ def test_client_tls_relation_broken_run_deferred_event(cloud_spec):
         leader=True,
         relations={peer_relation, status_peer_relation, client_tls_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with (
@@ -1456,7 +1456,7 @@ def test_client_tls_relation_broken_run_deferred_event(cloud_spec):
         assert state_out.get_relation(1).local_unit_data.get("tls-client-state") == "no-tls"
 
 
-def test_client_tls_relation_broken_not_active_yet(cloud_spec):
+def test_client_tls_relation_broken_not_active_yet():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -1474,7 +1474,7 @@ def test_client_tls_relation_broken_not_active_yet(cloud_spec):
         leader=True,
         relations={peer_relation, status_peer_relation, client_tls_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     state_out = ctx.run(ctx.on.relation_broken(relation=client_tls_relation), state_in)
@@ -1482,7 +1482,7 @@ def test_client_tls_relation_broken_not_active_yet(cloud_spec):
     assert state_out.get_relation(1).local_unit_data.get("tls-client-state") == "no-tls"
 
 
-def test_peer_relation_changed_ca_rotation_workload_error_defers(cloud_spec):
+def test_peer_relation_changed_ca_rotation_workload_error_defers():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -1499,7 +1499,7 @@ def test_peer_relation_changed_ca_rotation_workload_error_defers(cloud_spec):
         leader=False,
         relations={peer_relation, status_peer_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
     with patch(
         "src.events.tls.TLSEvents._orchestrate_ca_rotation",
@@ -1511,7 +1511,7 @@ def test_peer_relation_changed_ca_rotation_workload_error_defers(cloud_spec):
     assert "valkey_peers_relation_changed" in [e.name for e in state_out.deferred]
 
 
-def test_certificate_already_applied_without_peer_relation(cloud_spec):
+def test_certificate_already_applied_without_peer_relation():
     # A certificate-available can arrive before the peer relation exists, so the
     # idempotency guard must degrade to "not applied" instead of dereferencing the
     # unbuilt unit databag model.
@@ -1533,7 +1533,7 @@ def test_certificate_already_applied_without_peer_relation(cloud_spec):
         leader=True,
         relations={status_peer_relation, client_tls_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with ctx(ctx.on.update_status(), state_in) as manager:

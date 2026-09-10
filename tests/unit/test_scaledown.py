@@ -34,14 +34,14 @@ def get_3_unit_peer_relation():
     )
 
 
-def test_other_unit_has_lock(cloud_spec):
+def test_other_unit_has_lock():
     """Test that if another unit has the lock, then the lock is not acquired."""
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     relation = get_3_unit_peer_relation()
     container = testing.Container(name=CONTAINER, can_connect=True)
     data_storage = testing.Storage(name="data")
     state_in = testing.State(
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
         relations={relation},
         leader=True,
         containers={container},
@@ -64,14 +64,14 @@ def test_other_unit_has_lock(cloud_spec):
         assert "RequestingLockTimedOutError" in str(exc_info.value)
 
 
-def test_non_primary(cloud_spec):
+def test_non_primary():
     """Test scale-down behavior when this unit is not the primary but successfully acquires the lock."""
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     relation = get_3_unit_peer_relation()
     container = testing.Container(name=CONTAINER, can_connect=True)
     data_strorage = testing.Storage(name="data")
     state_in = testing.State(
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
         relations={relation},
         leader=True,
         containers={container},
@@ -108,14 +108,14 @@ def test_non_primary(cloud_spec):
         status_is(state_out, ScaleDownStatuses.GOING_AWAY.value)
 
 
-def test_non_primary_block_until_synced(cloud_spec):
+def test_non_primary_block_until_synced():
     """Test scale-down behavior when this unit is not the primary but needs sync before shutdown."""
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     relation = get_3_unit_peer_relation()
     container = testing.Container(name=CONTAINER, can_connect=True)
     data_strorage = testing.Storage(name="data")
     state_in = testing.State(
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
         relations={relation},
         leader=True,
         containers={container},
@@ -159,14 +159,14 @@ def test_non_primary_block_until_synced(cloud_spec):
         status_is(state_out, ScaleDownStatuses.GOING_AWAY.value)
 
 
-def test_primary(cloud_spec):
+def test_primary():
     """Test scale-down behavior when this unit is the primary and successfully acquires the lock."""
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     relation = get_3_unit_peer_relation()
     container = testing.Container(name=CONTAINER, can_connect=True)
     data_strorage = testing.Storage(name="data")
     state_in = testing.State(
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
         relations={relation},
         leader=True,
         containers={container},
@@ -210,7 +210,7 @@ def test_primary(cloud_spec):
         status_is(state_out, ScaleDownStatuses.GOING_AWAY.value)
 
 
-def test_last_leader_unit_going_down(cloud_spec):
+def test_last_leader_unit_going_down():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     relation = testing.PeerRelation(
         id=1,
@@ -224,7 +224,7 @@ def test_last_leader_unit_going_down(cloud_spec):
     container = testing.Container(name=CONTAINER, can_connect=True)
     data_strorage = testing.Storage(name="data")
     state_in = testing.State(
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
         relations={relation},
         leader=True,
         containers={container},
@@ -254,7 +254,7 @@ def test_last_leader_unit_going_down(cloud_spec):
         )
 
 
-def test_logs_storage_detaching_triggers_scaledown(cloud_spec):
+def test_logs_storage_detaching_triggers_scaledown():
     """Detaching a non-data storage (logs) must also run the scale-down path.
 
     A unit teardown detaches every storage; whichever detaches first must run
@@ -265,7 +265,7 @@ def test_logs_storage_detaching_triggers_scaledown(cloud_spec):
     container = testing.Container(name=CONTAINER, can_connect=True)
     logs_storage = testing.Storage(name="logs")
     state_in = testing.State(
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
         relations={relation},
         leader=True,
         containers={container},
@@ -288,7 +288,7 @@ def test_logs_storage_detaching_triggers_scaledown(cloud_spec):
         assert "RequestingLockTimedOutError" in str(exc_info.value)
 
 
-def test_repeat_detach_is_noop_once_going_away(cloud_spec):
+def test_repeat_detach_is_noop_once_going_away():
     """Once scale-down has run, later storage detaches must not re-run it."""
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     relation = testing.PeerRelation(
@@ -304,7 +304,7 @@ def test_repeat_detach_is_noop_once_going_away(cloud_spec):
     container = testing.Container(name=CONTAINER, can_connect=True)
     data_storage = testing.Storage(name="data")
     state_in = testing.State(
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
         relations={relation},
         leader=True,
         containers={container},
@@ -327,7 +327,7 @@ def test_repeat_detach_is_noop_once_going_away(cloud_spec):
     mock_stop.assert_not_called()
 
 
-def test_cannot_get_primary_ip_leader(cloud_spec):
+def test_cannot_get_primary_ip_leader():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     relation = testing.PeerRelation(
         id=1,
@@ -341,7 +341,7 @@ def test_cannot_get_primary_ip_leader(cloud_spec):
     container = testing.Container(name=CONTAINER, can_connect=True)
     data_strorage = testing.Storage(name="data")
     state_in = testing.State(
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
         relations={relation},
         leader=True,
         containers={container},
@@ -369,7 +369,7 @@ def test_cannot_get_primary_ip_leader(cloud_spec):
         )
 
 
-def test_unit_departure_sentinel_reset_flag(cloud_spec):
+def test_unit_departure_sentinel_reset_flag():
     """Test that the flag for removing Sentinels is set on peer-relation-departed."""
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     relation = testing.PeerRelation(
@@ -390,7 +390,7 @@ def test_unit_departure_sentinel_reset_flag(cloud_spec):
     )
     container = testing.Container(name=CONTAINER, can_connect=True)
     state_in = testing.State(
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
         relations={relation},
         leader=True,
         planned_units=2,
@@ -400,7 +400,7 @@ def test_unit_departure_sentinel_reset_flag(cloud_spec):
     assert state_out.get_relation(1).local_app_data.get("sentinel-reset-required") == "true"
 
 
-def test_unit_departure_leader(cloud_spec):
+def test_unit_departure_leader():
     """Test Sentinel removal after scale down."""
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     relation = testing.PeerRelation(
@@ -423,7 +423,7 @@ def test_unit_departure_leader(cloud_spec):
     status_peer_relation = testing.PeerRelation(id=2, endpoint=STATUS_PEERS_RELATION)
     container = testing.Container(name=CONTAINER, can_connect=True)
     state_in = testing.State(
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
         relations={relation, status_peer_relation},
         leader=True,
         planned_units=2,
@@ -460,7 +460,7 @@ def test_unit_departure_leader(cloud_spec):
         assert state_out.get_relation(1).local_app_data.get("sentinel-reset-required") == "false"
 
 
-def test_unit_departure_not_yet_removed(cloud_spec):
+def test_unit_departure_not_yet_removed():
     """Test scale-down behavior when this unit is the primary and successfully acquires the lock."""
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     relation = testing.PeerRelation(
@@ -483,7 +483,7 @@ def test_unit_departure_not_yet_removed(cloud_spec):
     status_peer_relation = testing.PeerRelation(id=2, endpoint=STATUS_PEERS_RELATION)
     container = testing.Container(name=CONTAINER, can_connect=True)
     state_in = testing.State(
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
         relations={relation, status_peer_relation},
         leader=True,
         planned_units=2,
@@ -517,7 +517,7 @@ def test_unit_departure_not_yet_removed(cloud_spec):
         )
 
 
-def test_unit_departure_leader_failed(cloud_spec):
+def test_unit_departure_leader_failed():
     """Test scale-down behavior when this unit is the primary and successfully acquires the lock."""
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     relation = testing.PeerRelation(
@@ -540,7 +540,7 @@ def test_unit_departure_leader_failed(cloud_spec):
     status_peer_relation = testing.PeerRelation(id=2, endpoint=STATUS_PEERS_RELATION)
     container = testing.Container(name=CONTAINER, can_connect=True)
     state_in = testing.State(
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
         relations={relation, status_peer_relation},
         leader=True,
         planned_units=2,
@@ -579,14 +579,14 @@ def test_unit_departure_leader_failed(cloud_spec):
         )
 
 
-def test_unit_departure_non_leader(cloud_spec):
+def test_unit_departure_non_leader():
     """Test scale-down behavior when this unit is the primary and successfully acquires the lock."""
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     relation = get_3_unit_peer_relation()
     status_peer_relation = testing.PeerRelation(id=2, endpoint=STATUS_PEERS_RELATION)
     container = testing.Container(name=CONTAINER, can_connect=True)
     state_in = testing.State(
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
         relations={relation, status_peer_relation},
         leader=False,
         containers={container},
