@@ -29,6 +29,7 @@ from literals import (
     CONFIG_FILE,
     DATA_STORAGE_PATH,
     LOG_STORAGE_PATH,
+    METRICS_SERVICE,
     SENTINEL_ACL_FILE,
     SENTINEL_CONFIG_FILE,
 )
@@ -126,9 +127,10 @@ class ValkeyK8sWorkload(WorkloadBase):
         self.tls_paths: TLSPaths = TLSPaths(tls_root=self.tls_dir)
         self.valkey_service = "valkey"
         self.sentinel_service = "sentinel"
-        self.metric_service = "metrics-exporter"
+        self.metrics_service = METRICS_SERVICE
         self.cli = "valkey-cli"
         self.user = "_daemon_"
+        self._metrics_env: dict[str, str] = {}
 
     @property
     @override
@@ -138,6 +140,17 @@ class ValkeyK8sWorkload(WorkloadBase):
     @property
     def pebble_layer(self) -> pebble.Layer:
         """Create the Pebble configuration layer for Valkey."""
+        metrics_service_def: pebble.ServiceDict = {
+            "override": "replace",
+            "summary": "Valkey metric exporter",
+            "command": "prometheus-redis-exporter",
+            "user": self.user,
+            "group": self.user,
+            "startup": "enabled",
+        }
+        if self._metrics_env:
+            metrics_service_def["environment"] = self._metrics_env
+
         layer_config: pebble.LayerDict = {
             "summary": "Valkey layer",
             "description": "Valkey layer",
@@ -158,14 +171,7 @@ class ValkeyK8sWorkload(WorkloadBase):
                     "group": self.user,
                     "startup": "enabled",
                 },
-                self.metric_service: {
-                    "override": "replace",
-                    "summary": "Valkey metric exporter",
-                    "command": "prometheus-redis-exporter",
-                    "user": self.user,
-                    "group": self.user,
-                    "startup": "enabled",
-                },
+                self.metrics_service: metrics_service_def,
             },
         }
         return pebble.Layer(layer_config)
@@ -178,7 +184,7 @@ class ValkeyK8sWorkload(WorkloadBase):
             else:
                 self.container.add_layer(CHARM, self.pebble_layer, combine=True)
                 self.container.restart(
-                    self.valkey_service, self.sentinel_service, self.metric_service
+                    self.valkey_service, self.sentinel_service, self.metrics_service
                 )
         except (
             pebble.ChangeError,
@@ -243,11 +249,7 @@ class ValkeyK8sWorkload(WorkloadBase):
         retry_error_callback=lambda _: False,
     )
     def alive(self, service: str | None = None) -> bool:
-        services = (
-            [service]
-            if service
-            else [self.valkey_service, self.sentinel_service, self.metric_service]
-        )
+        services = [service] if service else [self.valkey_service, self.sentinel_service]
         try:
             for service_name in services:
                 if not self.container.get_service(service_name).is_running():
@@ -256,6 +258,24 @@ class ValkeyK8sWorkload(WorkloadBase):
             logger.warning("Cannot check service health: %s", e)
             return False
         return True
+
+    @override
+    def configure_metrics_exporter(self, env: dict[str, str]) -> bool:
+        """Apply the exporter environment. Return True if changed."""
+        if not self.can_connect:
+            return False
+        try:
+            plan = self.container.get_plan()
+            service = plan.services.get(self.metrics_service)
+            self._metrics_env = env
+            if service and service.environment == env:
+                return False
+
+            self.container.add_layer(CHARM, self.pebble_layer, combine=True)
+            self.container.replan()
+            return True
+        except (pebble.ConnectionError, pebble.APIError) as e:
+            raise ValkeyWorkloadCommandError(f"Failed to configure metrics exporter: {e}") from e
 
     @override
     def exec(
@@ -296,7 +316,7 @@ class ValkeyK8sWorkload(WorkloadBase):
         targets = (
             (service,)
             if service
-            else (self.valkey_service, self.sentinel_service, self.metric_service)
+            else (self.valkey_service, self.sentinel_service, self.metrics_service)
         )
         try:
             self.container.stop(*targets)

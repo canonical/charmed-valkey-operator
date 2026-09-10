@@ -10,15 +10,18 @@ CHARM = "valkey"
 CONTAINER = "valkey"
 
 SNAP_NAME = "valkey-charmed"
-SNAP_REVISIONS = {"x86_64": 141, "aarch64": 143}
+# TODO update once snap PR merged and snap released
+SNAP_REVISIONS = {"x86_64": 169, "aarch64": 170}
 SNAP_SERVICE = "server"
 SNAP_SENTINEL_SERVICE = "sentinel"
+METRICS_SERVICE = "metrics-exporter"
 SNAP_COMMON_PATH = f"var/snap/{SNAP_NAME}/common"
 SNAP_CURRENT_PATH = f"var/snap/{SNAP_NAME}/current"
 SNAP_CONFIG_FILE = "etc/valkey/valkey.conf"
 SNAP_SENTINEL_CONFIG_FILE = "etc/valkey/sentinel.conf"
 SNAP_ACL_FILE = "etc/valkey/users.acl"
 SNAP_SENTINEL_ACL_FILE = "etc/valkey/sentinel-users.acl"
+METRICS_EXPORTER_ENV_FILE = "etc/valkey/metrics-exporter.env"
 
 CONFIG_FILE = "var/lib/valkey/valkey.conf"
 SENTINEL_CONFIG_FILE = "var/lib/valkey/sentinel.conf"
@@ -72,6 +75,7 @@ CLIENT_PORT = 6379
 TLS_PORT = 6380
 SENTINEL_PORT = 26379
 SENTINEL_TLS_PORT = 26380
+METRICS_PORT = 9121
 
 PRIMARY_NAME = "primary"
 QUORUM_NUMBER = 2

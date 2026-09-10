@@ -32,6 +32,7 @@ from literals import (
     INTERNAL_USERS_PASSWORD_CONFIG,
     INTERNAL_USERS_SECRET_LABEL_SUFFIX,
     LOG_STORAGE,
+    METRICS_PORT,
     PEER_RELATION,
     SENTINEL_PORT,
     SENTINEL_TLS_PORT,
@@ -175,6 +176,7 @@ class BaseEvents(ops.Object):
         try:
             self.charm.auth_manager.configure_auth()
             self.charm.config_manager.configure_services(primary_endpoint)
+            self.charm.metrics_manager.reconcile()
             self.charm.workload.start()
         except ValkeyConfigurationError:
             self.charm.state.unit_server.update(
@@ -249,6 +251,8 @@ class BaseEvents(ops.Object):
             self.charm.unit.open_port("tcp", SENTINEL_PORT)
         self.charm.unit.open_port("tcp", TLS_PORT)
         self.charm.unit.open_port("tcp", SENTINEL_TLS_PORT)
+        if self.charm.state.substrate == Substrate.K8S:
+            self.charm.unit.open_port("tcp", METRICS_PORT)
 
         if not self.charm.unit.is_leader():
             return
@@ -272,6 +276,7 @@ class BaseEvents(ops.Object):
         # reassert min-replicas-to-write to match the (possibly changed) topology
         if self.charm.state.unit_server.is_started:
             self.charm.cluster_manager.reconcile_min_replicas_to_write()
+            self.charm.metrics_manager.reconcile()
 
         if not self.charm.unit.is_leader():
             return
@@ -344,6 +349,8 @@ class BaseEvents(ops.Object):
         if not self.charm.state.unit_server.is_started:
             logger.warning("Service not started")
             return
+
+        self.charm.metrics_manager.reconcile()
 
         # runs before the leader check (any unit's address can change) and is not
         # deferred: update-status repeats on its own
@@ -615,6 +622,7 @@ class BaseEvents(ops.Object):
                 self.charm.auth_manager.update_local_valkey_admin_password()
                 if self.charm.state.unit_server.is_started:
                     self.charm.cluster_manager.update_primary_auth()
+                self.charm.metrics_manager.reconcile()
             except (
                 ValkeyACLLoadError,
                 ValueError,

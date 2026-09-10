@@ -35,6 +35,8 @@ from literals import (
     ARCHIVE_STORAGE_PATH,
     DATA_STORAGE_PATH,
     LOG_STORAGE_PATH,
+    METRICS_EXPORTER_ENV_FILE,
+    METRICS_SERVICE,
     SNAP_ACL_FILE,
     SNAP_COMMON_PATH,
     SNAP_CONFIG_FILE,
@@ -125,8 +127,30 @@ class ValkeyVmWorkload(WorkloadBase):
         self.tls_paths: TLSPaths = TLSPaths(tls_root=self.tls_dir)
         self.valkey_service = SNAP_SERVICE
         self.sentinel_service = SNAP_SENTINEL_SERVICE
+        self.metrics_service = METRICS_SERVICE
+        self.metrics_env_file = self.root_dir / SNAP_CURRENT_PATH / METRICS_EXPORTER_ENV_FILE
         self.cli = f"{SNAP_NAME}.cli"
         self.user = "snap_daemon"
+
+    @override
+    def configure_metrics_exporter(self, env: dict[str, str]) -> bool:
+        """Apply the exporter environment. Return True if changed."""
+        content = "".join(f"{k}={v}\n" for k, v in sorted(env.items()))
+        if self.path_exists(self.metrics_env_file):
+            try:
+                if self.read_file(self.metrics_env_file) == content:
+                    return False
+            except ValkeyWorkloadCommandError:
+                pass
+
+        self.write_file(
+            content,
+            self.metrics_env_file,
+            mode=0o640,
+            user=self.user,
+            group="root",
+        )
+        return True
 
     @property
     @override

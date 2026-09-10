@@ -24,6 +24,7 @@ from managers.backup import BackupManager
 from managers.cluster import ClusterManager
 from managers.config import ConfigManager
 from managers.external_clients import ExternalClientsManager
+from managers.metrics import MetricsManager
 from managers.sentinel import SentinelManager
 from managers.tls import TLSManager
 from managers.topology import TopologyManager
@@ -66,6 +67,7 @@ class ValkeyCharm(ops.CharmBase):
         self.topology_manager = TopologyManager(state=self.state, workload=self.workload)
         self.auth_manager = AuthManager(state=self.state, workload=self.workload)
         self.backup_manager = BackupManager(state=self.state, workload=self.workload)
+        self.metrics_manager = MetricsManager(state=self.state, workload=self.workload)
 
         # --- STATUS HANDLER ---
         self.status = StatusHandler(
@@ -77,6 +79,7 @@ class ValkeyCharm(ops.CharmBase):
             self.tls_manager,
             self.client_manager,
             self.backup_manager,
+            self.metrics_manager,
         )
 
         # --- EVENT HANDLERS ---
