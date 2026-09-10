@@ -186,7 +186,9 @@ class TLSManager(ManagerStatusProtocol):
         if self.state.substrate == Substrate.K8S:
             primary_service = f"{self.state.model.app.name}-{K8sService.PRIMARY.value}"
             replicas_service = f"{self.state.model.app.name}-{K8sService.REPLICAS.value}"
+            sans_dns.add(primary_service)
             sans_dns.add(resolve_k8s_fqdn(primary_service))
+            sans_dns.add(replicas_service)
             sans_dns.add(resolve_k8s_fqdn(replicas_service))
 
         return frozenset(sans_dns)
