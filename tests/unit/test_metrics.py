@@ -25,7 +25,7 @@ from workload_vm import ValkeyVmWorkload
 
 
 @pytest.fixture
-def base_state(cloud_spec):
+def base_state():
     container = testing.Container(
         name=CONTAINER,
         can_connect=True,
@@ -36,15 +36,14 @@ def base_state(cloud_spec):
     )
     return testing.State(
         leader=True,
-        model=testing.Model(name="my-k8s-model", type="kubernetes", cloud_spec=cloud_spec),
         containers=[container],
         relations=[peer_relation],
     )
 
 
-def test_exporter_env_rendered_k8s(cloud_spec, base_state):
+def test_exporter_env_rendered_k8s(base_state):
     """Assert exporter environment is rendered with correct values on K8s."""
-    ctx = testing.Context(ValkeyCharm, app_trusted=True)
+    ctx = testing.Context(ValkeyCharm)
     state = ctx.run(ctx.on.leader_elected(), base_state)
 
     secret = state.get_secret(
@@ -68,16 +67,15 @@ def test_exporter_env_rendered_k8s(cloud_spec, base_state):
         assert env["REDIS_EXPORTER_INCL_CONFIG_METRICS"] == "false"
 
 
-def test_exporter_env_rendered_vm(cloud_spec_vm):
+def test_exporter_env_rendered_vm(vm_environment):
     """Assert exporter environment binds to localhost on VM."""
-    ctx = testing.Context(ValkeyCharm, app_trusted=True)
+    ctx = testing.Context(ValkeyCharm)
     peer_relation = testing.PeerRelation(
         id=1,
         endpoint=PEER_RELATION,
     )
     state = testing.State(
         leader=True,
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec_vm),
         relations=[peer_relation],
     )
     state = ctx.run(ctx.on.leader_elected(), state)
@@ -88,7 +86,7 @@ def test_exporter_env_rendered_vm(cloud_spec_vm):
         assert env["REDIS_EXPORTER_WEB_LISTEN_ADDRESS"] == f"127.0.0.1:{METRICS_PORT}"
 
 
-def test_dead_exporter_does_not_mark_workload_unhealthy(cloud_spec, mocker):
+def test_dead_exporter_does_not_mark_workload_unhealthy(mocker):
     """A stopped or dead exporter must not make workload.alive() return False."""
     container = mocker.MagicMock()
 
@@ -106,9 +104,9 @@ def test_dead_exporter_does_not_mark_workload_unhealthy(cloud_spec, mocker):
     assert workload.alive(workload.metrics_service) is False
 
 
-def test_reconcile_idempotency(cloud_spec, base_state):
+def test_reconcile_idempotency(base_state):
     """Successive reconciles without change produce no restarts."""
-    ctx = testing.Context(ValkeyCharm, app_trusted=True)
+    ctx = testing.Context(ValkeyCharm)
     state = ctx.run(ctx.on.leader_elected(), base_state)
 
     with ctx(ctx.on.update_status(), state) as mgr:
@@ -123,9 +121,9 @@ def test_reconcile_idempotency(cloud_spec, base_state):
             assert mock_restart.call_count == 1
 
 
-def test_exporter_target_unchanged_when_client_tls_enabled(cloud_spec, base_state):
+def test_exporter_target_unchanged_when_client_tls_enabled(base_state):
     """Exporter target is always rediss://<endpoint>:6380 regardless of client TLS state."""
-    ctx = testing.Context(ValkeyCharm, app_trusted=True)
+    ctx = testing.Context(ValkeyCharm)
     state = ctx.run(ctx.on.leader_elected(), base_state)
 
     with ctx(ctx.on.update_status(), state) as mgr:
