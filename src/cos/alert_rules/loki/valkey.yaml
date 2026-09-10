@@ -1,0 +1,45 @@
+# Copyright 2026 Canonical Ltd.
+# See LICENSE file for licensing details.
+
+groups:
+  - name: valkey_logs_alerts
+    rules:
+      - alert: ValkeyBackgroundSaveFailed
+        expr: |
+          count_over_time({%%juju_topology%%} |~ "(?i)background saving error|failed saving db" [5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: Valkey background save failed
+          description: Background RDB save (BGSAVE) failed on {{ $labels.juju_unit }}. Data persistence may be impaired.
+
+      - alert: ValkeyMisconfiguredRefusingWrites
+        expr: |
+          count_over_time({%%juju_topology%%} |~ "(?i)MISCONF Errors writing to the AOF|MISCONF Valkey is configured to save RDB snapshots, but is currently not able to persist" [5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: Valkey refusing writes due to snapshot failure (MISCONF)
+          description: Valkey on {{ $labels.juju_unit }} is refusing writes because the last background save failed.
+
+      - alert: ValkeyOutOfMemoryAllocationFailed
+        expr: |
+          count_over_time({%%juju_topology%%} |~ "(?i)Out of memory allocating|OOM command not allowed" [5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: Valkey memory allocation failed (OOM)
+          description: Valkey on {{ $labels.juju_unit }} failed to allocate memory or rejected command due to OOM.
+
+      - alert: ValkeySentinelFailoverAborted
+        expr: |
+          count_over_time({%%juju_topology%%} |~ "(?i)failover-abort-|failover-detected" [5m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: Sentinel failover abort or unexpected failover event
+          description: Sentinel on {{ $labels.juju_unit }} reported a failover abort or event.

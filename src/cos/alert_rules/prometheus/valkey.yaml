@@ -1,0 +1,86 @@
+# Copyright 2026 Canonical Ltd.
+# See LICENSE file for licensing details.
+
+groups:
+  - name: valkey_alerts
+    rules:
+      - alert: ValkeyDown
+        expr: redis_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Valkey is down on {{ $labels.juju_unit }}
+          description: Valkey process on unit {{ $labels.juju_unit }} is unreachable by metrics exporter.
+
+      - alert: ValkeyMissingPrimary
+        expr: (count(redis_instance_info{role="master"}) or vector(0)) < 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Valkey cluster has no primary
+          description: Valkey cluster has no unit reporting role="master". Automatic failover may have stalled.
+
+      - alert: ValkeyTooManyPrimaries
+        expr: count(redis_instance_info{role="master"}) > 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Valkey cluster has multiple primaries (split-brain)
+          description: More than one Valkey unit reports role="master". Sentinel split-brain detected.
+
+      - alert: ValkeyDisconnectedReplicas
+        expr: count without (instance, job) (redis_connected_slaves) - sum without (instance, job) (redis_connected_slaves) - 1 > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Valkey replicas disconnected from replication
+          description: Replicas are not replicating from primary on Valkey cluster {{ $labels.juju_application }}.
+
+      - alert: ValkeyReplicationBroken
+        expr: delta(redis_connected_slaves[1m]) < 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Valkey replication connection dropped
+          description: A replica node was lost from primary on {{ $labels.juju_unit }}.
+
+      - alert: ValkeyClusterFlapping
+        expr: changes(redis_connected_slaves[1m]) > 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Valkey replication connection is flapping
+          description: Rapid reconnect/disconnect cycles detected on {{ $labels.juju_unit }}.
+
+      - alert: ValkeyOutOfSystemMemory
+        expr: redis_memory_used_bytes / redis_total_system_memory_bytes * 100 > 90 and redis_total_system_memory_bytes > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Valkey system memory usage > 90%
+          description: Memory usage on {{ $labels.juju_unit }} exceeds 90% of available system memory.
+
+      - alert: ValkeyOutOfConfiguredMaxmemory
+        expr: redis_memory_used_bytes / redis_memory_max_bytes * 100 > 90 and on(instance) redis_memory_max_bytes > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Valkey memory usage approaching maxmemory (> 90%)
+          description: Memory usage on {{ $labels.juju_unit }} is above 90% of configured maxmemory limit.
+
+      - alert: ValkeyTooManyConnections
+        expr: redis_connected_clients / redis_config_maxclients * 100 > 90 and redis_config_maxclients > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Valkey client connections > 90% of limit
+          description: Connected clients on {{ $labels.juju_unit }} exceeds 90% of maxclients.
