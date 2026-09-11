@@ -295,7 +295,9 @@ def test_freeze_db_process_on_primary(
     logger.info("Failover successful, new primary is at %s", new_primary_ip)
 
     new_primary_unit_name = get_unit_name_from_primary_ip(juju, new_primary_ip, substrate)
-    new_primary_hostname = f"{new_primary_unit_name.replace('/', '-')}.{app_name}-endpoints"
+    new_primary_hostname = (
+        f"{new_primary_unit_name.replace('/', '-')}.{app_name}-endpoints.testing.svc.cluster.local"
+    )
     new_primary_endpoint = new_primary_ip if substrate == Substrate.VM else new_primary_hostname
 
     number_of_replicas = get_number_connected_replicas(juju, tls_enabled=tls_enabled)
