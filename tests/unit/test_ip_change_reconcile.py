@@ -29,12 +29,12 @@ def _peer_relation(private_ip: str = OLD_IP) -> testing.PeerRelation:
     )
 
 
-def _state(cloud_spec, *, relations: set, leader: bool = True) -> testing.State:
+def _state(*, relations: set, leader: bool = True) -> testing.State:
     return testing.State(
         leader=leader,
         relations=relations,
         containers={testing.Container(name=CONTAINER, can_connect=True)},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
 
@@ -80,10 +80,10 @@ def _reconcile_env() -> ExitStack:
     return stack
 
 
-def test_update_status_refreshes_client_certificate_when_ip_changed(cloud_spec_vm):
+def test_update_status_refreshes_client_certificate_when_ip_changed(vm_environment):
     """update-status must converge a unit whose IP changed while client TLS is enabled."""
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
-    state_in = _state(cloud_spec_vm, relations={_peer_relation(), _client_tls_relation()})
+    state_in = _state(relations={_peer_relation(), _client_tls_relation()})
 
     with (
         _reconcile_env(),
@@ -100,10 +100,10 @@ def test_update_status_refreshes_client_certificate_when_ip_changed(cloud_spec_v
     mock_create_certificate.assert_not_called()
 
 
-def test_update_status_regenerates_self_signed_certificate_when_ip_changed(cloud_spec_vm):
+def test_update_status_regenerates_self_signed_certificate_when_ip_changed(vm_environment):
     """Without a client TLS provider the charm regenerates the self-signed cert itself."""
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
-    state_in = _state(cloud_spec_vm, relations={_peer_relation()})
+    state_in = _state(relations={_peer_relation()})
 
     with (
         _reconcile_env(),
@@ -117,10 +117,10 @@ def test_update_status_regenerates_self_signed_certificate_when_ip_changed(cloud
     assert state_out.get_relation(1).local_unit_data["private-ip"] == NEW_IP
 
 
-def test_update_status_does_not_reconcile_when_ip_unchanged(cloud_spec_vm):
+def test_update_status_does_not_reconcile_when_ip_unchanged(vm_environment):
     """A unit whose address is unchanged must not reconfigure or reissue certificates."""
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
-    state_in = _state(cloud_spec_vm, relations={_peer_relation(private_ip=NEW_IP)})
+    state_in = _state(relations={_peer_relation(private_ip=NEW_IP)})
 
     with (
         _reconcile_env(),
@@ -136,7 +136,7 @@ def test_update_status_does_not_reconcile_when_ip_unchanged(cloud_spec_vm):
     assert not any(isinstance(e, RefreshTLSCertificatesEvent) for e in ctx.emitted_events)
 
 
-def test_update_status_does_not_reconcile_before_an_address_is_recorded(cloud_spec_vm):
+def test_update_status_does_not_reconcile_before_an_address_is_recorded(vm_environment):
     """A unit that has not recorded an address yet has nothing to reconcile.
 
     `private-ip` is first written on start, so a config-changed/update-status arriving
@@ -144,7 +144,7 @@ def test_update_status_does_not_reconcile_before_an_address_is_recorded(cloud_sp
     restart of a unit that has not started.
     """
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
-    state_in = _state(cloud_spec_vm, relations={_peer_relation(private_ip="")})
+    state_in = _state(relations={_peer_relation(private_ip="")})
 
     with (
         _reconcile_env(),
@@ -160,10 +160,10 @@ def test_update_status_does_not_reconcile_before_an_address_is_recorded(cloud_sp
     assert not any(isinstance(e, RefreshTLSCertificatesEvent) for e in ctx.emitted_events)
 
 
-def test_update_status_reconciles_on_non_leader_unit(cloud_spec_vm):
+def test_update_status_reconciles_on_non_leader_unit(vm_environment):
     """Any unit can be the one whose address changed, so the reconcile precedes the leader check."""
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
-    state_in = _state(cloud_spec_vm, relations={_peer_relation()}, leader=False)
+    state_in = _state(relations={_peer_relation()}, leader=False)
 
     with (
         _reconcile_env(),
@@ -177,10 +177,10 @@ def test_update_status_reconciles_on_non_leader_unit(cloud_spec_vm):
     assert state_out.get_relation(1).local_unit_data["private-ip"] == NEW_IP
 
 
-def test_update_status_survives_certificate_read_failure(cloud_spec_vm):
+def test_update_status_survives_certificate_read_failure(vm_environment):
     """A failed cert read must not error the unit — update-status runs on every interval."""
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
-    state_in = _state(cloud_spec_vm, relations={_peer_relation()})
+    state_in = _state(relations={_peer_relation()})
 
     with (
         _reconcile_env(),
@@ -194,10 +194,10 @@ def test_update_status_survives_certificate_read_failure(cloud_spec_vm):
     assert not state_out.deferred
 
 
-def test_config_changed_defers_on_certificate_read_failure(cloud_spec_vm):
+def test_config_changed_defers_on_certificate_read_failure(vm_environment):
     """config-changed has no periodic retry, so it must defer instead of dropping the reconcile."""
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
-    state_in = _state(cloud_spec_vm, relations={_peer_relation()})
+    state_in = _state(relations={_peer_relation()})
 
     with (
         _reconcile_env(),
@@ -212,10 +212,10 @@ def test_config_changed_defers_on_certificate_read_failure(cloud_spec_vm):
     assert [d.name for d in state_out.deferred] == ["config_changed"]
 
 
-def test_update_status_does_not_defer_while_awaiting_provider_certificate(cloud_spec_vm):
+def test_update_status_does_not_defer_while_awaiting_provider_certificate(vm_environment):
     """Waiting on the TLS provider must not build a deferral backlog on a periodic hook."""
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
-    state_in = _state(cloud_spec_vm, relations={_peer_relation(), _client_tls_relation()})
+    state_in = _state(relations={_peer_relation(), _client_tls_relation()})
 
     with _reconcile_env():
         state_out = ctx.run(ctx.on.update_status(), state_in)
@@ -224,10 +224,10 @@ def test_update_status_does_not_defer_while_awaiting_provider_certificate(cloud_
     assert not state_out.deferred
 
 
-def test_update_status_is_noop_on_k8s(cloud_spec):
+def test_update_status_is_noop_on_k8s():
     """K8s uses hostnames, so the address reconcile must not even read the binding."""
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
-    state_in = _state(cloud_spec, relations={_peer_relation()})
+    state_in = _state(relations={_peer_relation()})
 
     with (
         _reconcile_env(),

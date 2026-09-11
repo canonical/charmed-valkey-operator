@@ -29,7 +29,10 @@ METADATA = yaml.safe_load(Path("./metadata.yaml").read_text())
 APP_NAME = METADATA["name"]
 
 
-def test_ldap_new_ca_cert(cloud_spec):
+def test_ldap_new_ca_cert():
+    ldap_cert = "ldap_certificate"
+    ldap_ca_cert = "ldap_ca_certificate"
+
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -51,7 +54,7 @@ def test_ldap_new_ca_cert(cloud_spec):
         leader=False,  # must be stored on all units
         relations={peer_relation, status_peer_relation, ldap_ca_cert_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with (
@@ -70,7 +73,7 @@ def test_ldap_new_ca_cert(cloud_spec):
         reload_tls.assert_not_called()
 
 
-def test_ldap_ca_removed(cloud_spec):
+def test_ldap_ca_removed():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -85,7 +88,7 @@ def test_ldap_ca_removed(cloud_spec):
         leader=False,
         relations={peer_relation, status_peer_relation, ldap_ca_cert_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with (
@@ -97,7 +100,10 @@ def test_ldap_ca_removed(cloud_spec):
         reload_tls.assert_not_called()
 
 
-def test_ca_available_error_defers(cloud_spec):
+def test_ca_available_error_defers():
+    ldap_cert = "ldap_certificate"
+    ldap_ca_cert = "ldap_ca_certificate"
+
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -118,7 +124,7 @@ def test_ca_available_error_defers(cloud_spec):
         leader=False,
         relations={peer_relation, status_peer_relation, ldap_ca_cert_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
     with (
         patch(
@@ -130,7 +136,7 @@ def test_ca_available_error_defers(cloud_spec):
     assert "certificate_set_updated" in [e.name for e in state_out.deferred]
 
 
-def test_ca_removed_error_defers(cloud_spec):
+def test_ca_removed_error_defers():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -144,7 +150,7 @@ def test_ca_removed_error_defers(cloud_spec):
         leader=False,
         relations={peer_relation, status_peer_relation, ldap_ca_cert_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
     with patch(
         "workload_k8s.ValkeyK8sWorkload.remove_file",
@@ -154,7 +160,7 @@ def test_ca_removed_error_defers(cloud_spec):
     assert "certificates_removed" in [e.name for e in state_out.deferred]
 
 
-def test_no_ldap_ca_cert_relation(cloud_spec):
+def test_no_ldap_ca_cert_relation():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -169,7 +175,7 @@ def test_no_ldap_ca_cert_relation(cloud_spec):
         leader=True,
         relations={peer_relation, status_peer_relation, ldap_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     state_out = ctx.run(ctx.on.relation_changed(relation=ldap_relation), state_in)
@@ -177,7 +183,7 @@ def test_no_ldap_ca_cert_relation(cloud_spec):
     assert not status_is(state_out, AuthStatuses.LDAP_CA_CERT_MISSING.value, is_app=False)
 
 
-def test_enable_ldap(cloud_spec):
+def test_enable_ldap():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -228,7 +234,7 @@ def test_enable_ldap(cloud_spec):
         secrets={ldap_secret},
         config={"ldap-map": "ldap_group:valkey_group"},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with ctx(ctx.on.update_status(), state_in) as manager:
@@ -264,7 +270,7 @@ def test_enable_ldap(cloud_spec):
             assert state_out.get_relation(1).local_unit_data.get("ldap-enabled") == "true"
 
 
-def test_disable_ldap(cloud_spec):
+def test_disable_ldap():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -290,7 +296,7 @@ def test_disable_ldap(cloud_spec):
         relations={peer_relation, status_peer_relation, ldap_relation, ldap_ca_cert_relation},
         secrets={ldap_secret},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with ctx(ctx.on.update_status(), state_in) as manager:
@@ -314,7 +320,7 @@ def test_disable_ldap(cloud_spec):
             assert state_out.get_relation(1).local_unit_data.get("ldap-enabled") == "false"
 
 
-def test_invalid_config(cloud_spec):
+def test_invalid_config():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -347,7 +353,7 @@ def test_invalid_config(cloud_spec):
         relations={peer_relation, status_peer_relation, ldap_relation, ldap_ca_cert_relation},
         secrets={ldap_secret},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with ctx(ctx.on.update_status(), state_in) as manager:
@@ -374,7 +380,7 @@ def test_invalid_config(cloud_spec):
             assert state_out.get_relation(1).local_unit_data.get("ldap-enabled") == "false"
 
 
-def test_invalid_bind_secret(cloud_spec):
+def test_invalid_bind_secret():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -407,7 +413,7 @@ def test_invalid_bind_secret(cloud_spec):
         relations={peer_relation, status_peer_relation, ldap_relation, ldap_ca_cert_relation},
         secrets={ldap_secret},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with ctx(ctx.on.update_status(), state_in) as manager:
@@ -434,7 +440,7 @@ def test_invalid_bind_secret(cloud_spec):
             assert state_out.get_relation(1).local_unit_data.get("ldap-enabled") == "false"
 
 
-def test_config_change(cloud_spec):
+def test_config_change():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -490,7 +496,7 @@ def test_config_change(cloud_spec):
             "ldap-search-dn-attribute": "entryDN",
         },
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with ctx(ctx.on.config_changed(), state_in) as manager:
@@ -525,7 +531,7 @@ def test_config_change(cloud_spec):
             assert state_out.get_relation(1).local_unit_data.get("ldap-enabled") == "true"
 
 
-def test_config_change_but_invalid(cloud_spec):
+def test_config_change_but_invalid():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -558,7 +564,7 @@ def test_config_change_but_invalid(cloud_spec):
         secrets={ldap_secret},
         config={"ldap-map": "ldap_group:valkey_group"},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with (
@@ -577,7 +583,7 @@ def test_config_change_but_invalid(cloud_spec):
         assert not state_out.get_relation(1).local_unit_data.get("ldap-enabled") == "true"
 
 
-def test_ldap_bind_secret_update(cloud_spec):
+def test_ldap_bind_secret_update():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -631,7 +637,7 @@ def test_ldap_bind_secret_update(cloud_spec):
         secrets={ldap_secret},
         config={"ldap-map": "ldap_group:valkey_group"},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with ctx(ctx.on.secret_changed(secret=ldap_secret), state_in) as manager:
@@ -659,7 +665,7 @@ def test_ldap_bind_secret_update(cloud_spec):
             reload_acl.assert_called_once()
 
 
-def test_reload_ldap_fails(cloud_spec):
+def test_reload_ldap_fails():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -713,7 +719,7 @@ def test_reload_ldap_fails(cloud_spec):
         secrets={ldap_secret},
         config={"ldap-map": "ldap_group:valkey_group"},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with (
@@ -735,7 +741,7 @@ def test_reload_ldap_fails(cloud_spec):
         assert "config_changed" in [e.name for e in state_out.deferred]
 
 
-def test_not_started_no_config_load(cloud_spec):
+def test_not_started_no_config_load():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(id=1, endpoint=PEER_RELATION)
     status_peer_relation = testing.PeerRelation(id=2, endpoint=STATUS_PEERS_RELATION)
@@ -782,7 +788,7 @@ def test_not_started_no_config_load(cloud_spec):
         secrets={ldap_secret},
         config={"ldap-map": "ldap_group:valkey_group"},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with ctx(ctx.on.update_status(), state_in) as manager:
@@ -806,7 +812,7 @@ def test_not_started_no_config_load(cloud_spec):
             assert state_out.get_relation(1).local_unit_data.get("ldap-enabled") == "true"
 
 
-def test_sync_ldap_users_leader_only(cloud_spec):
+def test_sync_ldap_users_leader_only():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(id=1, endpoint=PEER_RELATION)
     status_peer_relation = testing.PeerRelation(id=2, endpoint=STATUS_PEERS_RELATION)
@@ -815,7 +821,7 @@ def test_sync_ldap_users_leader_only(cloud_spec):
         leader=False,
         relations={peer_relation, status_peer_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with raises(testing.ActionFailed) as e:
@@ -823,7 +829,7 @@ def test_sync_ldap_users_leader_only(cloud_spec):
     assert "Action can only be run on the leader unit" in e.value.message
 
 
-def test_sync_ldap_users_unit_not_started(cloud_spec):
+def test_sync_ldap_users_unit_not_started():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(id=1, endpoint=PEER_RELATION)
     status_peer_relation = testing.PeerRelation(id=2, endpoint=STATUS_PEERS_RELATION)
@@ -832,7 +838,7 @@ def test_sync_ldap_users_unit_not_started(cloud_spec):
         leader=True,
         relations={peer_relation, status_peer_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with raises(testing.ActionFailed) as e:
@@ -843,7 +849,7 @@ def test_sync_ldap_users_unit_not_started(cloud_spec):
     assert "wait for startup to complete" in e.value.message
 
 
-def test_sync_ldap_users_not_yet_enabled(cloud_spec):
+def test_sync_ldap_users_not_yet_enabled():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -856,7 +862,7 @@ def test_sync_ldap_users_not_yet_enabled(cloud_spec):
         leader=True,
         relations={peer_relation, status_peer_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with raises(testing.ActionFailed) as e:
@@ -864,7 +870,7 @@ def test_sync_ldap_users_not_yet_enabled(cloud_spec):
     assert "LDAP not yet enabled on this unit" in e.value.message
 
 
-def test_sync_ldap_users_not_yet_enabled_non_leader(cloud_spec):
+def test_sync_ldap_users_not_yet_enabled_non_leader():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -877,7 +883,7 @@ def test_sync_ldap_users_not_yet_enabled_non_leader(cloud_spec):
         leader=True,
         relations={peer_relation, status_peer_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with patch("managers.cluster.ClusterManager.reload_acl_file") as reload_acl:
@@ -889,7 +895,7 @@ def test_sync_ldap_users_not_yet_enabled_non_leader(cloud_spec):
         assert state_out.get_relation(1).local_unit_data.get("ldap-user-epoch") == "0"
 
 
-def test_sync_ldap_users_no_ldap_relation(cloud_spec):
+def test_sync_ldap_users_no_ldap_relation():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -905,7 +911,7 @@ def test_sync_ldap_users_no_ldap_relation(cloud_spec):
         leader=True,
         relations={peer_relation, status_peer_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with raises(testing.ActionFailed) as e:
@@ -913,7 +919,7 @@ def test_sync_ldap_users_no_ldap_relation(cloud_spec):
     assert "LDAP configuration is invalid" in e.value.message
 
 
-def test_sync_ldap_users_invalid_config(cloud_spec):
+def test_sync_ldap_users_invalid_config():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -949,7 +955,7 @@ def test_sync_ldap_users_invalid_config(cloud_spec):
         relations={peer_relation, status_peer_relation, ldap_relation, ldap_ca_cert_relation},
         secrets={ldap_secret},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with raises(testing.ActionFailed) as e:
@@ -957,7 +963,7 @@ def test_sync_ldap_users_invalid_config(cloud_spec):
     assert "LDAP configuration is invalid" in e.value.message
 
 
-def test_sync_ldap_users(cloud_spec):
+def test_sync_ldap_users():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -1012,7 +1018,7 @@ def test_sync_ldap_users(cloud_spec):
         secrets={ldap_secret},
         config={"ldap-map": "ldap_group_1:valkey_group_1, ldap_group_2:valkey_group_2"},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with ctx(ctx.on.action("sync-ldap-users"), state_in) as manager:
@@ -1041,7 +1047,7 @@ def test_sync_ldap_users(cloud_spec):
     reload_acl.assert_called_once()
 
 
-def test_sync_ldap_users_non_leader(cloud_spec):
+def test_sync_ldap_users_non_leader():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -1097,7 +1103,7 @@ def test_sync_ldap_users_non_leader(cloud_spec):
         secrets={ldap_secret},
         config={"ldap-map": "ldap_group_1:valkey_group_1, ldap_group_2:valkey_group_2"},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with ctx(ctx.on.relation_changed(relation=peer_relation, remote_unit=1), state_in) as manager:
@@ -1123,7 +1129,7 @@ def test_sync_ldap_users_non_leader(cloud_spec):
             reload_acl.assert_called_once()
 
 
-def test_ldap_peer_relation_changed_skipped_during_restore(cloud_spec):
+def test_ldap_peer_relation_changed_skipped_during_restore():
     """During a restore the LDAP peer-relation handler must not reload ACLs.
 
     The restore workflow itself drives peer relation-changed events; reloading
@@ -1182,7 +1188,7 @@ def test_ldap_peer_relation_changed_skipped_during_restore(cloud_spec):
         secrets={ldap_secret},
         config={"ldap-map": "ldap_group:valkey_group"},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with (
@@ -1196,7 +1202,7 @@ def test_ldap_peer_relation_changed_skipped_during_restore(cloud_spec):
         reload_acl.assert_not_called()
 
 
-def test_ldap_config_changed_deferred_during_restore(cloud_spec):
+def test_ldap_config_changed_deferred_during_restore():
     """A config change arriving during a restore is deferred, not applied to the primary."""
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
@@ -1244,7 +1250,7 @@ def test_ldap_config_changed_deferred_during_restore(cloud_spec):
         secrets={ldap_secret},
         config={"ldap-map": "ldap_group:valkey_group"},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with (
@@ -1259,7 +1265,7 @@ def test_ldap_config_changed_deferred_during_restore(cloud_spec):
         assert "config_changed" in [e.name for e in state_out.deferred]
 
 
-def test_ldap_config_changed_not_deferred_when_ldap_invalid_during_restore(cloud_spec):
+def test_ldap_config_changed_not_deferred_when_ldap_invalid_during_restore():
     """A config change on a non-LDAP cluster must not defer during a restore.
 
     The restore guard sits below the is_ldap_valid filter, so a cluster without
@@ -1278,7 +1284,7 @@ def test_ldap_config_changed_not_deferred_when_ldap_invalid_during_restore(cloud
         leader=False,
         relations={peer_relation, status_peer_relation},  # no LDAP relation -> is_ldap_valid False
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with ctx(ctx.on.update_status(), state_in) as manager:
@@ -1289,7 +1295,7 @@ def test_ldap_config_changed_not_deferred_when_ldap_invalid_during_restore(cloud
         event.defer.assert_not_called()
 
 
-def test_ldap_ready_deferred_during_restore(cloud_spec):
+def test_ldap_ready_deferred_during_restore():
     """An ldap-ready event during a restore is deferred, not applied to the primary."""
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
@@ -1321,7 +1327,7 @@ def test_ldap_ready_deferred_during_restore(cloud_spec):
         secrets={ldap_secret},
         config={"ldap-map": "ldap_group:valkey_group"},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with ctx(ctx.on.update_status(), state_in) as manager:
@@ -1340,7 +1346,7 @@ def test_ldap_ready_deferred_during_restore(cloud_spec):
             event.defer.assert_called_once()
 
 
-def test_ldap_secret_changed_guard_only_defers_the_ldap_secret_during_restore(cloud_spec):
+def test_ldap_secret_changed_guard_only_defers_the_ldap_secret_during_restore():
     """Only the LDAP bind-password secret defers during a restore.
 
     An unrelated secret must return early, since the restore guard now sits
@@ -1391,7 +1397,7 @@ def test_ldap_secret_changed_guard_only_defers_the_ldap_secret_during_restore(cl
         secrets={ldap_secret},
         config={"ldap-map": "ldap_group:valkey_group"},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with ctx(ctx.on.update_status(), state_in) as manager:
@@ -1411,7 +1417,7 @@ def test_ldap_secret_changed_guard_only_defers_the_ldap_secret_during_restore(cl
         ldap_evt.defer.assert_called_once()
 
 
-def test_sync_ldap_users_rejected_during_restore(cloud_spec):
+def test_sync_ldap_users_rejected_during_restore():
     """The sync-ldap-users action is rejected while a restore is in progress."""
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
@@ -1429,7 +1435,7 @@ def test_sync_ldap_users_rejected_during_restore(cloud_spec):
         leader=True,
         relations={peer_relation, status_peer_relation},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with raises(testing.ActionFailed) as e:
@@ -1437,7 +1443,7 @@ def test_sync_ldap_users_rejected_during_restore(cloud_spec):
     assert "restore" in e.value.message.lower()
 
 
-def test_sync_ldap_users_up_to_date(cloud_spec):
+def test_sync_ldap_users_up_to_date():
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -1494,7 +1500,7 @@ def test_sync_ldap_users_up_to_date(cloud_spec):
         secrets={ldap_secret},
         config={"ldap-map": "ldap_group_1:valkey_group_1, ldap_group_2:valkey_group_2"},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
 
     with patch("managers.cluster.ClusterManager.reload_acl_file") as reload_acl:
@@ -1503,7 +1509,6 @@ def test_sync_ldap_users_up_to_date(cloud_spec):
 
 
 def _ldap_query_state(
-    cloud_spec,
     config: dict[str, str],
     leader: bool = False,
     ldap_enabled: bool = False,
@@ -1567,9 +1572,9 @@ def _ldap_query_state(
     return ctx, state_in
 
 
-def test_ldap_query_default_template(cloud_spec):
+def test_ldap_query_default_template():
     """The default `ldap-query-template` addresses groups by their `cn` RDN."""
-    ctx, state_in = _ldap_query_state(cloud_spec, {})
+    ctx, state_in = _ldap_query_state({})
 
     with ctx(ctx.on.update_status(), state_in) as manager:
         charm: ValkeyCharm = manager.charm
@@ -1588,7 +1593,6 @@ def test_ldap_query_default_template(cloud_spec):
 def test_ldap_query_configured_template(cloud_spec):
     """A configured `ldap-query-template` replaces the default, e.g. for GLAuth."""
     ctx, state_in = _ldap_query_state(
-        cloud_spec,
         {"ldap-query-template": "(&(objectClass=posixAccount)(memberOf=ou={group},*))"},
     )
 
@@ -1632,14 +1636,14 @@ def test_ldap_query_template_with_unknown_placeholder_is_invalid(cloud_spec):
     assert status_is(state_out, AuthStatuses.LDAP_QUERY_TEMPLATE_INVALID.value, is_app=True)
 
 
-def test_ldap_acl_skips_users_while_ca_cert_missing(cloud_spec):
+def test_ldap_acl_skips_users_while_ca_cert_missing():
     """A CA file that has not landed yet omits LDAP users instead of failing the ACL write.
 
     `is_ldap_valid` is satisfied by the `ldap-ca-cert` relation existing, but the LDAP connection
     needs the CA on disk. Raising here would fail `configure_auth` and latch the unit in
     CONFIGURATION_ERROR; the CA-available event regenerates the ACL once the file arrives.
     """
-    ctx, state_in = _ldap_query_state(cloud_spec, {})
+    ctx, state_in = _ldap_query_state({})
 
     with ctx(ctx.on.update_status(), state_in) as manager:
         charm: ValkeyCharm = manager.charm
@@ -1653,14 +1657,14 @@ def test_ldap_acl_skips_users_while_ca_cert_missing(cloud_spec):
             get_connection.assert_not_called()
 
 
-def test_update_status_reconciles_ldap_acl(cloud_spec):
+def test_update_status_reconciles_ldap_acl():
     """update-status re-syncs the LDAP users into the ACL on a started, LDAP-enabled unit.
 
     A unit whose ACL was written while the LDAP query could not run (a secret-backend timeout,
     the CA landing on a later event) keeps an ACL without the LDAP users; no relation event
     revisits it. update-status is the reconcile that converges it without `sync-ldap-users`.
     """
-    ctx, state_in = _ldap_query_state(cloud_spec, {}, ldap_enabled=True)
+    ctx, state_in = _ldap_query_state({}, ldap_enabled=True)
 
     with (
         patch("managers.tls.TLSManager.will_certificate_expire", return_value=False),
@@ -1683,7 +1687,7 @@ def test_update_status_reconciles_ldap_acl(cloud_spec):
     assert "user clark_kent on " in written_acl
 
 
-def test_update_status_skips_ldap_acl_during_restore(cloud_spec):
+def test_update_status_skips_ldap_acl_during_restore():
     """During a restore, update-status must not rewrite or reload the ACL.
 
     The restore workflow restarts the primary around the RDB swap; reloading ACLs into it
@@ -1691,7 +1695,7 @@ def test_update_status_skips_ldap_acl_during_restore(cloud_spec):
     update-status keeps coming, so the sync catches up once `restore-id` is cleared.
     """
     ctx, state_in = _ldap_query_state(
-        cloud_spec, {}, ldap_enabled=True, app_data={"restore-id": "2026-05-13T10:00:00Z"}
+        {}, ldap_enabled=True, app_data={"restore-id": "2026-05-13T10:00:00Z"}
     )
 
     with (
@@ -1708,14 +1712,14 @@ def test_update_status_skips_ldap_acl_during_restore(cloud_spec):
     reload_acl.assert_not_called()
 
 
-def test_update_status_skips_ldap_acl_before_unit_started(cloud_spec):
+def test_update_status_skips_ldap_acl_before_unit_started():
     """update-status leaves the ACL alone on a unit whose Valkey has not started yet.
 
     `ldap-enabled` can be set before the start machine finishes; the startup path writes the ACL
     itself, and `acl load` against a server that is not running only produces an error every
     update-status.
     """
-    ctx, state_in = _ldap_query_state(cloud_spec, {}, ldap_enabled=True, started=False)
+    ctx, state_in = _ldap_query_state({}, ldap_enabled=True, started=False)
 
     with (
         patch("managers.tls.TLSManager.will_certificate_expire", return_value=False),

@@ -265,7 +265,12 @@ def get_cluster_endpoints(juju: jubilant.Juju, app_name: str) -> list[str]:
 
     if model_info.type == "kubernetes":
         return [
-            unit_name.replace("/", "-") + "." + app_name + "-endpoints"
+            unit_name.replace("/", "-")
+            + "."
+            + app_name
+            + "-endpoints"
+            + "."
+            + "testing.svc.cluster.local"
             for unit_name in juju.status().get_units(app_name)
         ]
 

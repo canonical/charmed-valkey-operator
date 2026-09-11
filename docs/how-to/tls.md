@@ -167,12 +167,12 @@ into Valkey to ensure continued communication.
 ## Manage private keys
 
 You can manage private keys used by the charm to generate the certificate signing
-requests (CSR) by storing the private key in a [juju secret](https://canonical-juju.readthedocs-hosted.com/en/latest/user/reference/secret/)
+requests (CSR) by storing the private key in a [Juju secret](https://canonical-juju.readthedocs-hosted.com/en/latest/user/reference/secret/)
 and then referencing the secret in the [charm configuration](https://documentation.ubuntu.com/juju/latest/howto/manage-applications/index.html#configure-an-application).
 
 ### Store the private key in a Juju secret
 
-To store the private key in a juju secret, run the following command:
+To store the private key in a Juju secret, run the following command:
 
 ```shell
 juju add-secret tls-private-key private-key=$(base64 -w0 private-key.pem)

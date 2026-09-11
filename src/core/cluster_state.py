@@ -17,6 +17,7 @@ from dpcharmlibs.interfaces import (
     OpsRelationRepository,
 )
 
+from common.network_utils import resolve_k8s_fqdn
 from core.models import (
     BackupCredentials,
     LDAPState,
@@ -252,7 +253,8 @@ class ClusterState(ops.Object, StatusesStateProtocol):
             A string representing the hostname.localdomain of the unit.
         """
         unit_name = unit_name or self.charm.unit.name
-        return f"{unit_name.replace('/', '-')}.{self.charm.app.name}-endpoints"
+        service_name = f"{unit_name.replace('/', '-')}.{self.charm.app.name}-endpoints"
+        return resolve_k8s_fqdn(service_name)
 
     @property
     def number_units_started(self) -> int:

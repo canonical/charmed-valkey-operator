@@ -15,7 +15,7 @@ from src.literals import PEER_RELATION, StartState
 CONTAINER = "valkey"
 
 
-def _started_3_unit_state(cloud_spec):
+def _started_3_unit_state():
     """Return a started leader unit with two started peers (3 units total)."""
     relation = testing.PeerRelation(
         id=1,
@@ -31,15 +31,15 @@ def _started_3_unit_state(cloud_spec):
         leader=True,
         relations={relation},
         containers={testing.Container(name=CONTAINER, can_connect=True)},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
     return relation, state_in
 
 
-def test_peer_relation_changed_reconciles_min_replicas(cloud_spec):
+def test_peer_relation_changed_reconciles_min_replicas():
     """A peer relation-changed on a started unit reasserts min-replicas-to-write."""
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
-    relation, state_in = _started_3_unit_state(cloud_spec)
+    relation, state_in = _started_3_unit_state()
 
     with (
         patch("common.client.SentinelClient.primary", return_value={"quorum": "2"}),
@@ -51,10 +51,10 @@ def test_peer_relation_changed_reconciles_min_replicas(cloud_spec):
         mock_reconcile.assert_called_once()
 
 
-def test_peer_relation_departed_reconciles_min_replicas(cloud_spec):
+def test_peer_relation_departed_reconciles_min_replicas():
     """A peer relation-departed (scale down) on a started unit reasserts the value."""
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
-    relation, state_in = _started_3_unit_state(cloud_spec)
+    relation, state_in = _started_3_unit_state()
 
     with (
         patch("common.client.SentinelClient.primary", return_value={"quorum": "2"}),
@@ -67,7 +67,7 @@ def test_peer_relation_departed_reconciles_min_replicas(cloud_spec):
         mock_reconcile.assert_called_once()
 
 
-def test_restart_workload_reconciles_min_replicas(cloud_spec):
+def test_restart_workload_reconciles_min_replicas():
     """A Valkey workload restart reasserts the runtime value.
 
     The file ships min-replicas-to-write=1, but CONFIG SET does not survive a
@@ -75,7 +75,7 @@ def test_restart_workload_reconciles_min_replicas(cloud_spec):
     again or a small cluster would be write-frozen.
     """
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
-    _, state_in = _started_3_unit_state(cloud_spec)
+    _, state_in = _started_3_unit_state()
 
     event = MagicMock(spec=RestartWorkloadEvent)
     event.restart_valkey = True

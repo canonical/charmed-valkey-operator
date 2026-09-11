@@ -26,6 +26,7 @@ from ops import ModelError, SecretNotFoundError
 from validators import ValidationError, hostname
 
 from common.exceptions import ValkeyWorkloadCommandError
+from common.network_utils import resolve_k8s_fqdn
 from core.base_workload import WorkloadBase
 from core.cluster_state import ClusterState
 from literals import (
@@ -183,8 +184,12 @@ class TLSManager(ManagerStatusProtocol):
         sans_dns.add(self.state.hostname)
 
         if self.state.substrate == Substrate.K8S:
-            sans_dns.add(f"{self.state.model.app.name}-{K8sService.PRIMARY.value}")
-            sans_dns.add(f"{self.state.model.app.name}-{K8sService.REPLICAS.value}")
+            primary_service = f"{self.state.model.app.name}-{K8sService.PRIMARY.value}"
+            replicas_service = f"{self.state.model.app.name}-{K8sService.REPLICAS.value}"
+            sans_dns.add(primary_service)
+            sans_dns.add(resolve_k8s_fqdn(primary_service))
+            sans_dns.add(replicas_service)
+            sans_dns.add(resolve_k8s_fqdn(replicas_service))
 
         return frozenset(sans_dns)
 
