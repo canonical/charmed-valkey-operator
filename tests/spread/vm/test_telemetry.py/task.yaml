@@ -1,0 +1,7 @@
+summary: test_telemetry.py
+environment:
+  TEST_MODULE: test_telemetry_vm.py
+execute: |
+  tox run -e integration -- "tests/integration/observability/$TEST_MODULE" --substrate vm --alluredir="$SPREAD_TASK/allure-results"
+artifacts:
+  - allure-results

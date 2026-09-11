@@ -12,6 +12,7 @@ from src.charm import ValkeyCharm
 from src.literals import (
     INTERNAL_USERS_PASSWORD_CONFIG,
     INTERNAL_USERS_SECRET_LABEL_SUFFIX,
+    METRICS_PORT,
     PEER_RELATION,
     PRIMARY_NAME,
     STATUS_PEERS_RELATION,
@@ -27,6 +28,8 @@ CONTAINER = "valkey"
 SERVICE_VALKEY = "valkey"
 SERVICE_METRIC_EXPORTER = "metrics-exporter"
 SERVICE_SENTINEL = "sentinel"
+SERVICE_VALKEY_LOGS = "valkey-logs"
+SERVICE_SENTINEL_LOGS = "sentinel-logs"
 
 
 internal_passwords_secret = testing.Secret(
@@ -76,11 +79,42 @@ def test_start_primary():
                 "group": CHARM_USER,
                 "startup": "enabled",
             },
+            SERVICE_VALKEY_LOGS: {
+                "override": "replace",
+                "summary": "Stream the Valkey log file to stdout for log forwarding",
+                "command": "tail -n0 -F /var/log/valkey/valkey.log",
+                "user": CHARM_USER,
+                "group": CHARM_USER,
+                "startup": "enabled",
+            },
+            SERVICE_SENTINEL_LOGS: {
+                "override": "replace",
+                "summary": "Stream the Sentinel log file to stdout for log forwarding",
+                "command": "tail -n0 -F /var/log/valkey/sentinel.log",
+                "user": CHARM_USER,
+                "group": CHARM_USER,
+                "startup": "enabled",
+            },
         }
     }
 
     # generate passwords
     state_in = ctx.run(ctx.on.leader_elected(), state_in)
+    secret = state_in.get_secret(
+        label=f"{PEER_RELATION}.{APP_NAME}.app.{INTERNAL_USERS_SECRET_LABEL_SUFFIX}"
+    )
+    monitoring_password = secret.latest_content[f"{CharmUsers.VALKEY_MONITORING.value}-password"]
+    expected_plan["services"][SERVICE_METRIC_EXPORTER]["environment"] = {
+        "REDIS_ADDR": "rediss://valkey-0.valkey-endpoints:6380",
+        "REDIS_USER": CharmUsers.VALKEY_MONITORING.value,
+        "REDIS_PASSWORD": monitoring_password,
+        "REDIS_EXPORTER_TLS_CA_CERT_FILE": "/var/lib/valkey/tls/ca_certs/client_ca.pem",
+        "REDIS_EXPORTER_TLS_SERVER_NAME": "valkey-0.valkey-endpoints",
+        "REDIS_EXPORTER_WEB_LISTEN_ADDRESS": f"0.0.0.0:{METRICS_PORT}",
+        "REDIS_EXPORTER_INCL_SYSTEM_METRICS": "true",
+        "REDIS_EXPORTER_APPEND_INSTANCE_ROLE_LABEL": "true",
+        "REDIS_EXPORTER_INCL_CONFIG_METRICS": "false",
+    }
 
     # start event
     state_out = ctx.run(ctx.on.start(), state_in)

@@ -105,8 +105,14 @@ class WorkloadBase(ABC):
     tls_paths: TLSPaths
     valkey_service: str
     sentinel_service: str
+    metrics_service: str
     cli: str
     user: str
+
+    @abstractmethod
+    def configure_metrics_exporter(self, env: dict[str, str]) -> bool:
+        """Apply the exporter environment. Return True if changed."""
+        pass
 
     @property
     @abstractmethod
