@@ -467,7 +467,7 @@
           "color": {
             "mode": "thresholds"
           },
-          "decimals": 0,
+          "decimals": 2,
           "mappings": [
             {
               "options": {
@@ -535,7 +535,7 @@
             "type": "prometheus",
             "uid": "${prometheusds}"
           },
-          "expr": "sum(100 * (redis_memory_used_bytes{juju_model=~\"$juju_model\", juju_model_uuid=~\"$juju_model_uuid\", juju_application=~\"$juju_application\", juju_unit=~\"$juju_unit\"} / (redis_memory_max_bytes{juju_model=~\"$juju_model\", juju_model_uuid=~\"$juju_model_uuid\", juju_application=~\"$juju_application\", juju_unit=~\"$juju_unit\"} > 0 or redis_total_system_memory_bytes{juju_model=~\"$juju_model\", juju_model_uuid=~\"$juju_model_uuid\", juju_application=~\"$juju_application\", juju_unit=~\"$juju_unit\"})))",
+          "expr": "100 * (sum(redis_memory_used_bytes{juju_model=~\"$juju_model\", juju_model_uuid=~\"$juju_model_uuid\", juju_application=~\"$juju_application\", juju_unit=~\"$juju_unit\"}) / sum(redis_memory_max_bytes{juju_model=~\"$juju_model\", juju_model_uuid=~\"$juju_model_uuid\", juju_application=~\"$juju_application\", juju_unit=~\"$juju_unit\"} > 0 or redis_total_system_memory_bytes{juju_model=~\"$juju_model\", juju_model_uuid=~\"$juju_model_uuid\", juju_application=~\"$juju_application\", juju_unit=~\"$juju_unit\"}))",
           "format": "time_series",
           "intervalFactor": 2,
           "legendFormat": "",
