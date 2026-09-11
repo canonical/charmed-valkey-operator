@@ -30,9 +30,6 @@ APP_NAME = METADATA["name"]
 
 
 def test_ldap_new_ca_cert():
-    ldap_cert = "ldap_certificate"
-    ldap_ca_cert = "ldap_ca_certificate"
-
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -101,9 +98,6 @@ def test_ldap_ca_removed():
 
 
 def test_ca_available_error_defers():
-    ldap_cert = "ldap_certificate"
-    ldap_ca_cert = "ldap_ca_certificate"
-
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -1567,7 +1561,7 @@ def _ldap_query_state(
         secrets={ldap_secret},
         config={"ldap-map": "superheroes:valkey_group", **config},
         containers={container},
-        model=testing.Model(name="my-vm-model", type="lxd", cloud_spec=cloud_spec),
+        model=testing.Model(name="my-vm-model", type="lxd"),
     )
     return ctx, state_in
 
@@ -1590,7 +1584,7 @@ def test_ldap_query_default_template():
     )
 
 
-def test_ldap_query_configured_template(cloud_spec):
+def test_ldap_query_configured_template():
     """A configured `ldap-query-template` replaces the default, e.g. for GLAuth."""
     ctx, state_in = _ldap_query_state(
         {"ldap-query-template": "(&(objectClass=posixAccount)(memberOf=ou={group},*))"},
@@ -1610,10 +1604,10 @@ def test_ldap_query_configured_template(cloud_spec):
     )
 
 
-def test_ldap_query_template_without_placeholder_is_invalid(cloud_spec):
+def test_ldap_query_template_without_placeholder_is_invalid():
     """A template that never substitutes the group name blocks the charm."""
     ctx, state_in = _ldap_query_state(
-        cloud_spec, {"ldap-query-template": "(objectClass=posixAccount)"}, leader=True
+        {"ldap-query-template": "(objectClass=posixAccount)"}, leader=True
     )
 
     with ctx(ctx.on.update_status(), state_in) as manager:
@@ -1623,10 +1617,10 @@ def test_ldap_query_template_without_placeholder_is_invalid(cloud_spec):
     assert status_is(state_out, AuthStatuses.LDAP_QUERY_TEMPLATE_INVALID.value, is_app=True)
 
 
-def test_ldap_query_template_with_unknown_placeholder_is_invalid(cloud_spec):
+def test_ldap_query_template_with_unknown_placeholder_is_invalid():
     """A template referencing a placeholder the charm does not provide blocks the charm."""
     ctx, state_in = _ldap_query_state(
-        cloud_spec, {"ldap-query-template": "(memberOf=cn={grp},*)"}, leader=True
+        {"ldap-query-template": "(memberOf=cn={grp},*)"}, leader=True
     )
 
     with ctx(ctx.on.update_status(), state_in) as manager:
