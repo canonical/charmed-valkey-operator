@@ -162,7 +162,14 @@ class AuthManager(ManagerStatusProtocol):
         if not self.state.is_ldap_valid:
             return acl_content
 
-        self.state.unit_server.update({"ldap-sync-failed": False})
+        # `is_ldap_valid` is satisfied by the CA relation, but the connection needs the CA on
+        # disk, and the file lands on a later event. Omit the LDAP users rather than fail the
+        # whole ACL write: the CA-available event regenerates them once the file is there.
+        if not self.workload.tls_paths.ldap_ca.exists():
+            logger.warning("LDAP CA certificate not stored yet, omitting LDAP users from the ACL")
+            return acl_content
+
+        self.state.unit_server.update({"ldap-sync-failed": ""})
 
         # get non-LDAP users to avoid adding duplicate usernames to ACL files
         internal_users = [user.value for user in CharmUsers]
@@ -219,20 +226,21 @@ class AuthManager(ManagerStatusProtocol):
 
         base_dn = self.state.ldap.base_dn
         search_attribute = str(self.state.config.get("ldap-search-attribute", ""))
-        search_filter = str(self.state.config.get("ldap-search-filter", ""))
+        group_filter = str(self.state.config.get("ldap-query-template", "")).format(
+            group=ldap_group
+        )
 
         try:
             if not ldap_connection.search(
                 search_base=base_dn,
-                search_filter=f"(&({search_filter})(memberOf=ou={ldap_group},*))",
+                search_filter=group_filter,
                 attributes=search_attribute,
                 time_limit=10,
             ):
                 logger.error(
-                    "Failed to perform LDAP search with base dn %s, filter %s, group %s and attribute %s",
+                    "Failed to perform LDAP search with base dn %s, filter %s and attribute %s",
                     base_dn,
-                    search_filter,
-                    ldap_group,
+                    group_filter,
                     search_attribute,
                 )
                 self.state.unit_server.update({"ldap-sync-failed": True})
@@ -305,6 +313,29 @@ class AuthManager(ManagerStatusProtocol):
             )
             raise ValkeyConfigurationError("Failed to set configuration") from e
 
+    def _get_ldap_app_statuses(self) -> list[StatusObject]:
+        """Report every missing or invalid part of the app-wide LDAP configuration."""
+        return [
+            status
+            for is_configured, status in (
+                (self.state.ldap_ca_cert_relation, AuthStatuses.LDAP_CA_CERT_MISSING.value),
+                (self.state.config.get("ldap-map"), AuthStatuses.LDAP_MAP_CONFIG_MISSING.value),
+                (
+                    self.state.is_ldap_query_template_valid,
+                    AuthStatuses.LDAP_QUERY_TEMPLATE_INVALID.value,
+                ),
+                (
+                    self.state.requested_entity_permissions,
+                    AuthStatuses.LDAP_MAP_INTEGRATION_MISSING.value,
+                ),
+                (
+                    self.state.is_ldap_permission_config_valid,
+                    AuthStatuses.LDAP_MAP_PERMISSION_REQUEST_MISSING.value,
+                ),
+            )
+            if not is_configured
+        ]
+
     def get_statuses(self, scope: Scope, recompute: bool = False) -> list[StatusObject]:
         """Compute the auth manager's statuses."""
         status_list: list[StatusObject] = []
@@ -317,18 +348,7 @@ class AuthManager(ManagerStatusProtocol):
             return status_list or [CharmStatuses.ACTIVE_IDLE.value]
 
         if scope == "app":
-            if not self.state.ldap_ca_cert_relation:
-                status_list.append(AuthStatuses.LDAP_CA_CERT_MISSING.value)
-
-            if not self.state.config.get("ldap-map"):
-                status_list.append(AuthStatuses.LDAP_MAP_CONFIG_MISSING.value)
-
-            if not self.state.requested_entity_permissions:
-                status_list.append(AuthStatuses.LDAP_MAP_INTEGRATION_MISSING.value)
-
-            if not self.state.is_ldap_permission_config_valid:
-                status_list.append(AuthStatuses.LDAP_MAP_PERMISSION_REQUEST_MISSING.value)
-
+            status_list.extend(self._get_ldap_app_statuses())
             return status_list if status_list else [CharmStatuses.ACTIVE_IDLE.value]
 
         if not self.state.unit_server.is_ldap_enabled:

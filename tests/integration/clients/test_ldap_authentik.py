@@ -2,13 +2,16 @@
 # Copyright 2026 Canonical Ltd.
 # See LICENSE file for licensing details.
 
+import json
 import logging
+from pathlib import Path
 
 import jubilant
 import pytest
 
 from literals import CharmUsers, Substrate
 from statuses import AuthStatuses
+from tests.integration.clients.authentik import ENTRY_DN_ATTRIBUTE, provision_directory
 from tests.integration.helpers import (
     APP_NAME,
     GLIDE_RUNNER_NAME,
@@ -31,11 +34,22 @@ logger = logging.getLogger(__name__)
 NUM_UNITS = 3
 TEST_KEY = "test_key"
 TEST_VALUE = "test_value"
-LDAP_NAME = "glauth-k8s"
-LDAP_UTILS_NAME = "glauth-utils"
+LDAP_NAME = "authentik-ldap-outpost"
+LDAP_SERVER_NAME = "authentik-server"
+LDAP_WORKER_NAME = "authentik-worker"
 LDAP_PG_NAME = "postgresql-k8s"
 LDAP_INGRESS_NAME = "traefik-k8s"
 DATA_INTEGRATOR_NAME = "data-integrator"
+
+AUTHENTIK_CHANNEL = "latest/edge"
+# Every authentication costs Valkey an admin bind, a search and a user bind against the outpost,
+# and Authentik answers each in the high hundreds of milliseconds -- an order of magnitude slower
+# than GLAuth. Credentials are supplied when the client connects, so all three have to fit inside
+# the connection timeout; Glide's 2s default expires mid-bind and surfaces as "timed out".
+LDAP_CONNECTION_TIMEOUT_MS = 20000
+DIRECTORY_ENTRIES = json.loads(
+    Path("./tests/integration/clients/data/authentik_entries.json").read_text()
+)
 
 
 def test_build_and_deploy(
@@ -45,7 +59,7 @@ def test_build_and_deploy(
     substrate: Substrate,
     juju_k8s_model: jubilant.Juju,
 ) -> None:
-    """Deploy the charm under test, the LDAP stack and Data Integrator."""
+    """Deploy the charm under test, the Authentik LDAP stack and Data Integrator."""
     juju.deploy(
         charm,
         resources=IMAGE_RESOURCE if substrate == Substrate.K8S else None,
@@ -54,77 +68,69 @@ def test_build_and_deploy(
     )
     juju.deploy(glide_runner_charm, app=GLIDE_RUNNER_NAME)
     juju.deploy(DATA_INTEGRATOR_NAME, channel="latest/edge")
+
     juju_k8s_model.deploy(
         LDAP_PG_NAME,
         channel="14/stable",
         trust=True,
         config={"profile": "testing"},
     )
-    juju_k8s_model.deploy(LDAP_NAME, channel="latest/edge", trust=True)
-    juju_k8s_model.deploy(LDAP_UTILS_NAME, channel="latest/edge", trust=True)
+    juju_k8s_model.deploy(LDAP_SERVER_NAME, channel=AUTHENTIK_CHANNEL, trust=True)
+    juju_k8s_model.deploy(LDAP_WORKER_NAME, channel=AUTHENTIK_CHANNEL, trust=True)
+    # `direct` reads the live Authentik state; the default `cached` modes would serve a directory
+    # snapshot taken before this test creates its users
+    juju_k8s_model.deploy(
+        LDAP_NAME,
+        channel=AUTHENTIK_CHANNEL,
+        trust=True,
+        config={"search_mode": "direct", "bind_mode": "direct"},
+    )
+    # Traefik terminates LDAPS for the outpost, which never provisions a certificate of its own.
+    # `ingress_domain` stays unset so Traefik keeps a single certificate and serves it as the
+    # default one for the LDAPS TCP router.
     juju_k8s_model.deploy(LDAP_INGRESS_NAME, trust=True)
     juju_k8s_model.deploy(TLS_NAME, channel=TLS_CHANNEL)
 
     logger.info("Add integrations for LDAP")
-    juju_k8s_model.integrate(f"{LDAP_NAME}:pg-database", f"{LDAP_PG_NAME}:database")
-    juju_k8s_model.integrate(LDAP_NAME, LDAP_UTILS_NAME)
-    juju_k8s_model.integrate(LDAP_NAME, TLS_NAME)
-    juju_k8s_model.integrate(f"{LDAP_INGRESS_NAME}:certificates", TLS_NAME)
+    juju_k8s_model.integrate(f"{LDAP_SERVER_NAME}:pg-database", f"{LDAP_PG_NAME}:database")
+    juju_k8s_model.integrate(f"{LDAP_SERVER_NAME}:authentik-cluster", LDAP_WORKER_NAME)
+    juju_k8s_model.integrate(f"{LDAP_SERVER_NAME}:authentik-server-info", LDAP_NAME)
+    juju_k8s_model.integrate(f"{LDAP_SERVER_NAME}:traefik-route", LDAP_INGRESS_NAME)
+    juju_k8s_model.integrate(f"{LDAP_NAME}:traefik-route", LDAP_INGRESS_NAME)
+    juju_k8s_model.integrate(f"{LDAP_INGRESS_NAME}:certificates", f"{TLS_NAME}:certificates")
 
     juju.wait(
         lambda status: are_agents_idle(status, APP_NAME, idle_period=30, unit_count=NUM_UNITS),
-        timeout=600,
+        # the machine is very busy and under load with the entire stack of LDAP deployed
+        # allow more time to settle than usual
+        timeout=720,
     )
 
-    # PostgreSQL is deliberately absent: it re-stamps its agent status every few seconds under
-    # load, so an `idle_period` it takes part in may never elapse. An active GLAuth already
-    # implies a working database.
+    # Named apps only: on K8s this is the Valkey model too, where Data Integrator sits blocked
+    # until a later test configures it. PostgreSQL is deliberately absent -- it re-stamps its
+    # agent status every few seconds, so no `idle_period` it takes part in ever elapses, and an
+    # active authentik-server already implies a working database.
     juju_k8s_model.wait(
-        lambda status: are_agents_idle(
+        lambda status: are_apps_active_and_agents_idle(
             status,
             LDAP_NAME,
-            LDAP_UTILS_NAME,
+            LDAP_SERVER_NAME,
+            LDAP_WORKER_NAME,
+            LDAP_INGRESS_NAME,
             TLS_NAME,
             idle_period=30,
         ),
-        timeout=600,
+        timeout=1800,
     )
 
-    if substrate == Substrate.VM:
-        logger.info("Set up ingress")
-        juju_k8s_model.integrate(f"{LDAP_NAME}:ingress", f"{LDAP_INGRESS_NAME}:ingress-per-unit")
-        # GLAuth replaces its certificate the moment ingress lands, so that the ingress address
-        # becomes a SAN. Until the reissued one is loaded it keeps serving a certificate valid
-        # only for its in-cluster DNS name, and a Valkey connecting to the ingress address inside
-        # that window fails verification and caches the server as unhealthy for good. GLAuth
-        # reports `active` throughout the swap, so wait for its agent to fall idle instead.
-        # PostgreSQL stays out of the gate for the reason given above.
-        juju_k8s_model.wait(
-            lambda status: are_apps_active_and_agents_idle(
-                status,
-                LDAP_NAME,
-                LDAP_UTILS_NAME,
-                LDAP_INGRESS_NAME,
-                TLS_NAME,
-                idle_period=30,
-            ),
-            timeout=600,
-        )
-
     logger.info("Set up LDAP users")
-    utils_unit = next(iter(juju_k8s_model.status().get_units(LDAP_UTILS_NAME)))
-    ldif_file = "ldap_entries.ldif"
-    source_path = f"./tests/integration/clients/data/{ldif_file}"
-    target_path = f"/var/tmp/{ldif_file}"
-    juju_k8s_model.scp(source_path, f"{utils_unit}:{target_path}")
-    ldif_action = juju_k8s_model.run(utils_unit, "apply-ldif", params={"path": target_path})
-    assert ldif_action.status == "completed", "ldif-apply should succeed"
+    provision_directory(juju_k8s_model, LDAP_SERVER_NAME, DIRECTORY_ENTRIES)
 
     if substrate == Substrate.VM:
         logger.info("Set up cross-model offers")
         juju_k8s_model.offer(app=LDAP_NAME, endpoint="ldap", name="ldap")
-        # GLAuth only speaks certificate-transfer v0; take the CA from the provider that issued
-        # GLAuth's own certificate instead
+        # The outpost has no `send-ca-cert`; the CA that signed the LDAPS certificate Traefik
+        # serves is the one held by the certificate provider
         juju_k8s_model.offer(app=TLS_NAME, endpoint="send-ca-cert", name="ca")
 
 
@@ -155,6 +161,11 @@ def test_ldap_integration(
 
     logger.info("Add LDAP CA certificate")
     juju.integrate(f"{APP_NAME}:ldap-ca-cert", ca_name)
+    # wait for the CA cert relation to settle
+    juju.wait(
+        lambda status: are_agents_idle(status, APP_NAME, idle_period=30, unit_count=NUM_UNITS),
+        timeout=600,
+    )
     juju.wait(
         lambda status: does_status_match(
             status,
@@ -192,11 +203,9 @@ def test_enable_ldap(juju: jubilant.Juju) -> None:
     """Enable LDAP in Valkey and ensure access works correctly."""
     logger.info("Enabling LDAP in Valkey by matching permission roles to LDAP groups")
     valkey_ldap_config = {
-        # workaround for `DN` missing in GLAuth search entry attributes
-        "ldap-search-dn-attribute": "mail",
-        # GLAuth models groups as organizational units, unlike the `cn` default
-        "ldap-query-template": "(&(objectClass=posixAccount)(memberOf=ou={group},*))",
-        # the keys have to match the LDAP groups in ldap_entries.ldif
+        # Authentik publishes no DN attribute; each test user carries its own bind DN here
+        "ldap-search-dn-attribute": ENTRY_DN_ATTRIBUTE,
+        # the keys have to match the LDAP groups in authentik_entries.json
         "ldap-map": "superheroes:ldap_users_write, normies:ldap_users_read",
     }
     juju.config(APP_NAME, valkey_ldap_config)
@@ -214,6 +223,7 @@ def test_enable_ldap(juju: jubilant.Juju) -> None:
         password=get_password(juju, user=CharmUsers.VALKEY_ADMIN),
         key=TEST_KEY,
         value=TEST_VALUE,
+        connection_timeout=LDAP_CONNECTION_TIMEOUT_MS,
     )
     assert result == "OK", "Failed to write data for charm user with LDAP enabled"
 
@@ -224,12 +234,13 @@ def test_enable_ldap(juju: jubilant.Juju) -> None:
             username=CharmUsers.VALKEY_ADMIN.value,
             password=get_password(juju, user=CharmUsers.VALKEY_ADMIN),
             key=TEST_KEY,
+            connection_timeout=LDAP_CONNECTION_TIMEOUT_MS,
         )
         == TEST_VALUE
     ), "Failed to read data for charm user with LDAP enabled"
 
 
-def test_ensure_ldap_auth(juju: jubilant.Juju, substrate: Substrate) -> None:
+def test_ensure_ldap_auth(juju: jubilant.Juju) -> None:
     """Ensure authentication with LDAP works and authorization is set up correctly."""
     endpoints = get_cluster_endpoints(juju, APP_NAME)
 
@@ -245,6 +256,7 @@ def test_ensure_ldap_auth(juju: jubilant.Juju, substrate: Substrate) -> None:
         password=password,
         key=TEST_KEY,
         value=TEST_VALUE,
+        connection_timeout=LDAP_CONNECTION_TIMEOUT_MS,
     )
     assert result == "OK", f"Failed to write data for user {username} with LDAP enabled"
 
@@ -255,6 +267,7 @@ def test_ensure_ldap_auth(juju: jubilant.Juju, substrate: Substrate) -> None:
             username=username,
             password=password,
             key=TEST_KEY,
+            connection_timeout=LDAP_CONNECTION_TIMEOUT_MS,
         )
         == TEST_VALUE
     ), f"Failed to read data for user {username} with LDAP enabled"
@@ -271,6 +284,7 @@ def test_ensure_ldap_auth(juju: jubilant.Juju, substrate: Substrate) -> None:
             username=username,
             password=password,
             key=TEST_KEY,
+            connection_timeout=LDAP_CONNECTION_TIMEOUT_MS,
         )
         == TEST_VALUE
     ), f"Failed to read data for user {username} with LDAP enabled"
@@ -282,6 +296,7 @@ def test_ensure_ldap_auth(juju: jubilant.Juju, substrate: Substrate) -> None:
         password=password,
         key=TEST_KEY,
         value=TEST_VALUE,
+        connection_timeout=LDAP_CONNECTION_TIMEOUT_MS,
     )
     assert not result == "OK", "Failed to write data with LDAP enabled"
 
@@ -296,6 +311,7 @@ def test_ensure_ldap_auth(juju: jubilant.Juju, substrate: Substrate) -> None:
             endpoints=endpoints,
             username=username,
             password=password,
+            connection_timeout=LDAP_CONNECTION_TIMEOUT_MS,
         )
     except WrongPassError:
         logger.info("Auth test failed as expected")
@@ -304,10 +320,7 @@ def test_ensure_ldap_auth(juju: jubilant.Juju, substrate: Substrate) -> None:
 def test_disable_ldap(juju: jubilant.Juju, substrate: Substrate) -> None:
     """Ensure LDAP users can no longer access Valkey after LDAP was disabled."""
     logger.info("Disabling LDAP")
-    if substrate == Substrate.VM:
-        ldap_name = "ldap"
-    else:
-        ldap_name = LDAP_NAME
+    ldap_name = "ldap" if substrate == Substrate.VM else LDAP_NAME
     juju.remove_relation(f"{APP_NAME}:ldap", ldap_name)
 
     juju.wait(
@@ -324,8 +337,9 @@ def test_disable_ldap(juju: jubilant.Juju, substrate: Substrate) -> None:
         password=get_password(juju, user=CharmUsers.VALKEY_ADMIN),
         key=TEST_KEY,
         value=TEST_VALUE,
+        connection_timeout=LDAP_CONNECTION_TIMEOUT_MS,
     )
-    assert result == "OK", "Failed to write data for charm user with LDAP enabled"
+    assert result == "OK", "Failed to write data for charm user with LDAP disabled"
 
     assert (
         get_key(
@@ -334,9 +348,10 @@ def test_disable_ldap(juju: jubilant.Juju, substrate: Substrate) -> None:
             username=CharmUsers.VALKEY_ADMIN.value,
             password=get_password(juju, user=CharmUsers.VALKEY_ADMIN),
             key=TEST_KEY,
+            connection_timeout=LDAP_CONNECTION_TIMEOUT_MS,
         )
         == TEST_VALUE
-    ), "Failed to read data for charm user with LDAP enabled"
+    ), "Failed to read data for charm user with LDAP disabled"
 
     logger.info("Ensure access fails for LDAP user")
     # connect with user in LDAP group "superheroes"
@@ -349,4 +364,5 @@ def test_disable_ldap(juju: jubilant.Juju, substrate: Substrate) -> None:
             endpoints=endpoints,
             username=username,
             password=password,
+            connection_timeout=LDAP_CONNECTION_TIMEOUT_MS,
         )

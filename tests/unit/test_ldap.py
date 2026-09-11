@@ -30,9 +30,6 @@ APP_NAME = METADATA["name"]
 
 
 def test_ldap_new_ca_cert():
-    ldap_cert = "ldap_certificate"
-    ldap_ca_cert = "ldap_ca_certificate"
-
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -43,12 +40,9 @@ def test_ldap_new_ca_cert():
     ldap_ca_cert_relation = testing.Relation(
         id=3,
         endpoint=LDAP_CA_CERT_RELATION,
-        remote_units_data={
-            0: {
-                "certificate": ldap_cert,
-                "ca": ldap_ca_cert,
-                "chain": f'["{ldap_cert}", "{ldap_ca_cert}"]',
-            }
+        remote_app_data={
+            "certificates": '["ldap_ca_certificate", "ldap_intermediate_certificate"]',
+            "version": "1",
         },
     )
 
@@ -68,6 +62,10 @@ def test_ldap_new_ca_cert():
     ):
         ctx.run(ctx.on.relation_changed(relation=ldap_ca_cert_relation), state_in)
         write_ldap_ca.assert_called_once()
+        assert (
+            write_ldap_ca.call_args.kwargs["content"]
+            == "ldap_ca_certificate\nldap_intermediate_certificate"
+        )
         rehash_ca_certs.assert_not_called()
         reload_tls.assert_not_called()
 
@@ -100,9 +98,6 @@ def test_ldap_ca_removed():
 
 
 def test_ca_available_error_defers():
-    ldap_cert = "ldap_certificate"
-    ldap_ca_cert = "ldap_ca_certificate"
-
     ctx = testing.Context(ValkeyCharm, app_trusted=True)
     peer_relation = testing.PeerRelation(
         id=1,
@@ -113,12 +108,9 @@ def test_ca_available_error_defers():
     ldap_ca_cert_relation = testing.Relation(
         id=3,
         endpoint=LDAP_CA_CERT_RELATION,
-        remote_units_data={
-            0: {
-                "certificate": ldap_cert,
-                "ca": ldap_ca_cert,
-                "chain": f'["{ldap_cert}", "{ldap_ca_cert}"]',
-            }
+        remote_app_data={
+            "certificates": '["ldap_ca_certificate"]',
+            "version": "1",
         },
     )
     container = testing.Container(name=CONTAINER, can_connect=True)
@@ -135,7 +127,7 @@ def test_ca_available_error_defers():
         ),
     ):
         state_out = ctx.run(ctx.on.relation_changed(relation=ldap_ca_cert_relation), state_in)
-    assert "certificate_available" in [e.name for e in state_out.deferred]
+    assert "certificate_set_updated" in [e.name for e in state_out.deferred]
 
 
 def test_ca_removed_error_defers():
@@ -159,7 +151,7 @@ def test_ca_removed_error_defers():
         side_effect=ValkeyWorkloadCommandError("Pebble down"),
     ):
         state_out = ctx.run(ctx.on.relation_broken(relation=ldap_ca_cert_relation), state_in)
-    assert "certificate_removed" in [e.name for e in state_out.deferred]
+    assert "certificates_removed" in [e.name for e in state_out.deferred]
 
 
 def test_no_ldap_ca_cert_relation():
@@ -252,7 +244,6 @@ def test_enable_ldap():
             patch("managers.cluster.ClusterManager.reload_acl_file") as reload_acl,
         ):
             charm.ldap_events._on_ldap_ready(event)
-            state_out = manager.run()
 
             ldap_config = charm.config_manager.generate_ldap_config()
             assert ldap_config["ldap.search_bind_passwd"] == "dummy"
@@ -263,10 +254,13 @@ def test_enable_ldap():
             assert ldap_config["ldap.search_dn_attribute"] == "DN"
             assert ldap_config["ldap.search_filter"] == "objectClass=posixAccount"
 
+            # counted before the update-status below runs, which reconciles the ACL again
             set_config.assert_called_once()
             reload_ldap.assert_called_once()
             set_acl.assert_called_once()
             reload_acl.assert_called_once()
+
+            state_out = manager.run()
             assert state_out.get_relation(1).local_unit_data.get("ldap-enabled") == "true"
 
 
@@ -1506,3 +1500,229 @@ def test_sync_ldap_users_up_to_date():
     with patch("managers.cluster.ClusterManager.reload_acl_file") as reload_acl:
         ctx.run(ctx.on.relation_changed(relation=peer_relation, remote_unit=1), state_in)
         reload_acl.assert_not_called()
+
+
+def _ldap_query_state(
+    config: dict[str, str],
+    leader: bool = False,
+    ldap_enabled: bool = False,
+    app_data: dict[str, str] | None = None,
+    started: bool = True,
+) -> tuple[testing.Context, testing.State]:
+    """Build a context and state with a fully valid LDAP setup for filter tests."""
+    ctx = testing.Context(ValkeyCharm, app_trusted=True)
+    unit_data = {"start-state": "started"} if started else {}
+    if ldap_enabled:
+        unit_data["ldap-enabled"] = "true"
+    peer_relation = testing.PeerRelation(
+        id=1,
+        endpoint=PEER_RELATION,
+        local_unit_data=unit_data,
+        local_app_data=app_data or {},
+    )
+    status_peer_relation = testing.PeerRelation(id=2, endpoint=STATUS_PEERS_RELATION)
+    ldap_secret = testing.Secret({"password": "dummy"})
+
+    ldap_relation = testing.Relation(
+        id=3,
+        endpoint=LDAP_RELATION,
+        remote_app_data={
+            "auth_method": "simple",
+            "base_dn": "dc=ldap,dc=goauthentik,dc=io",
+            "bind_dn": "cn=valkey,ou=users,dc=ldap,dc=goauthentik,dc=io",
+            "bind_password_secret": ldap_secret.id,
+            "ldaps_urls": '["ldaps://10.0.0.1:636"]',
+            "starttls": "False",
+            "urls": '["ldap://10.0.0.1:3389"]',
+        },
+    )
+    ldap_ca_cert_relation = testing.Relation(id=4, endpoint=LDAP_CA_CERT_RELATION)
+    client_relation = testing.Relation(
+        id=5,
+        endpoint=EXTERNAL_CLIENTS_RELATION,
+        remote_app_data={
+            "version": "v1",
+            "requests": """[{"resource": "my-keys", "request-id": "8865631800293def", "salt": "6TNjC2Aid8hlfBpf", \
+                    "entity-permissions": [{"resource_name": "valkey_group", "resource_type": "acl", \
+                     "privileges": ["read", "write", "pubsub"]}]}]""",
+        },
+    )
+
+    container = testing.Container(name=CONTAINER, can_connect=True)
+    state_in = testing.State(
+        leader=leader,
+        relations={
+            peer_relation,
+            status_peer_relation,
+            ldap_relation,
+            ldap_ca_cert_relation,
+            client_relation,
+        },
+        secrets={ldap_secret},
+        config={"ldap-map": "superheroes:valkey_group", **config},
+        containers={container},
+        model=testing.Model(name="my-vm-model", type="lxd"),
+    )
+    return ctx, state_in
+
+
+def test_ldap_query_default_template():
+    """The default `ldap-query-template` addresses groups by their `cn` RDN."""
+    ctx, state_in = _ldap_query_state({})
+
+    with ctx(ctx.on.update_status(), state_in) as manager:
+        charm: ValkeyCharm = manager.charm
+        connection = MagicMock()
+        connection.entries = []
+
+        with patch("managers.auth.AuthManager._get_ldap_connection", return_value=connection):
+            charm.auth_manager._get_ldap_users_for_group("superheroes")
+
+    assert (
+        connection.search.call_args.kwargs["search_filter"]
+        == "(&(objectClass=posixAccount)(memberOf=cn=superheroes,*))"
+    )
+
+
+def test_ldap_query_configured_template():
+    """A configured `ldap-query-template` replaces the default, e.g. for GLAuth."""
+    ctx, state_in = _ldap_query_state(
+        {"ldap-query-template": "(&(objectClass=posixAccount)(memberOf=ou={group},*))"},
+    )
+
+    with ctx(ctx.on.update_status(), state_in) as manager:
+        charm: ValkeyCharm = manager.charm
+        connection = MagicMock()
+        connection.entries = []
+
+        with patch("managers.auth.AuthManager._get_ldap_connection", return_value=connection):
+            charm.auth_manager._get_ldap_users_for_group("superheroes")
+
+    assert (
+        connection.search.call_args.kwargs["search_filter"]
+        == "(&(objectClass=posixAccount)(memberOf=ou=superheroes,*))"
+    )
+
+
+def test_ldap_query_template_without_placeholder_is_invalid():
+    """A template that never substitutes the group name blocks the charm."""
+    ctx, state_in = _ldap_query_state(
+        {"ldap-query-template": "(objectClass=posixAccount)"}, leader=True
+    )
+
+    with ctx(ctx.on.update_status(), state_in) as manager:
+        assert not manager.charm.state.is_ldap_valid
+        state_out = manager.run()
+
+    assert status_is(state_out, AuthStatuses.LDAP_QUERY_TEMPLATE_INVALID.value, is_app=True)
+
+
+def test_ldap_query_template_with_unknown_placeholder_is_invalid():
+    """A template referencing a placeholder the charm does not provide blocks the charm."""
+    ctx, state_in = _ldap_query_state(
+        {"ldap-query-template": "(memberOf=cn={grp},*)"}, leader=True
+    )
+
+    with ctx(ctx.on.update_status(), state_in) as manager:
+        assert not manager.charm.state.is_ldap_valid
+        state_out = manager.run()
+
+    assert status_is(state_out, AuthStatuses.LDAP_QUERY_TEMPLATE_INVALID.value, is_app=True)
+
+
+def test_ldap_acl_skips_users_while_ca_cert_missing():
+    """A CA file that has not landed yet omits LDAP users instead of failing the ACL write.
+
+    `is_ldap_valid` is satisfied by the `ldap-ca-cert` relation existing, but the LDAP connection
+    needs the CA on disk. Raising here would fail `configure_auth` and latch the unit in
+    CONFIGURATION_ERROR; the CA-available event regenerates the ACL once the file arrives.
+    """
+    ctx, state_in = _ldap_query_state({})
+
+    with ctx(ctx.on.update_status(), state_in) as manager:
+        charm: ValkeyCharm = manager.charm
+        assert charm.state.is_ldap_valid
+
+        with (
+            patch("charmlibs.pathops.ContainerPath.exists", return_value=False),
+            patch("managers.auth.AuthManager._get_ldap_connection") as get_connection,
+        ):
+            assert charm.auth_manager._get_ldap_user_acl_lines() == ""
+            get_connection.assert_not_called()
+
+
+def test_update_status_reconciles_ldap_acl():
+    """update-status re-syncs the LDAP users into the ACL on a started, LDAP-enabled unit.
+
+    A unit whose ACL was written while the LDAP query could not run (a secret-backend timeout,
+    the CA landing on a later event) keeps an ACL without the LDAP users; no relation event
+    revisits it. update-status is the reconcile that converges it without `sync-ldap-users`.
+    """
+    ctx, state_in = _ldap_query_state({}, ldap_enabled=True)
+
+    with (
+        patch("managers.tls.TLSManager.will_certificate_expire", return_value=False),
+        patch("managers.sentinel.SentinelManager.reconcile_failover_suppression"),
+        patch("charmlibs.pathops.ContainerPath.exists", return_value=True),
+        patch("managers.auth.AuthManager._get_internal_user_acl_line", return_value=""),
+        patch("managers.auth.AuthManager._get_client_user_acl_lines", return_value=""),
+        patch("managers.auth.AuthManager._get_ldap_users_for_group", return_value=["clark_kent"]),
+        patch("workload_k8s.ValkeyK8sWorkload.write_file") as write_file,
+        patch("managers.cluster.ClusterManager.reload_acl_file") as reload_acl,
+    ):
+        ctx.run(ctx.on.update_status(), state_in)
+
+    reload_acl.assert_called_once()
+    written_acl = "".join(
+        str(call.args[0])
+        for call in write_file.call_args_list
+        if "user default off" in call.args[0]
+    )
+    assert "user clark_kent on " in written_acl
+
+
+def test_update_status_skips_ldap_acl_during_restore():
+    """During a restore, update-status must not rewrite or reload the ACL.
+
+    The restore workflow restarts the primary around the RDB swap; reloading ACLs into it
+    mid-restore would collide with that. Restore completion re-delivers relation-changed and
+    update-status keeps coming, so the sync catches up once `restore-id` is cleared.
+    """
+    ctx, state_in = _ldap_query_state(
+        {}, ldap_enabled=True, app_data={"restore-id": "2026-05-13T10:00:00Z"}
+    )
+
+    with (
+        patch("managers.tls.TLSManager.will_certificate_expire", return_value=False),
+        patch("managers.sentinel.SentinelManager.reconcile_failover_suppression"),
+        patch("charmlibs.pathops.ContainerPath.exists", return_value=True),
+        patch("managers.auth.AuthManager._get_internal_user_acl_line", return_value=""),
+        patch("managers.auth.AuthManager._get_client_user_acl_lines", return_value=""),
+        patch("managers.auth.AuthManager._get_ldap_users_for_group", return_value=["clark_kent"]),
+        patch("managers.cluster.ClusterManager.reload_acl_file") as reload_acl,
+    ):
+        ctx.run(ctx.on.update_status(), state_in)
+
+    reload_acl.assert_not_called()
+
+
+def test_update_status_skips_ldap_acl_before_unit_started():
+    """update-status leaves the ACL alone on a unit whose Valkey has not started yet.
+
+    `ldap-enabled` can be set before the start machine finishes; the startup path writes the ACL
+    itself, and `acl load` against a server that is not running only produces an error every
+    update-status.
+    """
+    ctx, state_in = _ldap_query_state({}, ldap_enabled=True, started=False)
+
+    with (
+        patch("managers.tls.TLSManager.will_certificate_expire", return_value=False),
+        patch("charmlibs.pathops.ContainerPath.exists", return_value=True),
+        patch("managers.auth.AuthManager._get_internal_user_acl_line", return_value=""),
+        patch("managers.auth.AuthManager._get_client_user_acl_lines", return_value=""),
+        patch("managers.auth.AuthManager._get_ldap_users_for_group", return_value=["clark_kent"]),
+        patch("managers.cluster.ClusterManager.reload_acl_file") as reload_acl,
+    ):
+        ctx.run(ctx.on.update_status(), state_in)
+
+    reload_acl.assert_not_called()

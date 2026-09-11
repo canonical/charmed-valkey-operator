@@ -1,0 +1,7 @@
+summary: test_ldap_authentik.py
+environment:
+  TEST_MODULE: test_ldap_authentik.py
+execute: |
+  tox run -e integration -- "tests/integration/clients/$TEST_MODULE" --substrate vm --alluredir="$SPREAD_TASK/allure-results"
+artifacts:
+  - allure-results

@@ -9,11 +9,9 @@ import time
 from typing import TYPE_CHECKING
 
 import ops
-
-# GLAuth is not compatible to certificate-transfer v1
-from charms.certificate_transfer_interface.v0.certificate_transfer import (
-    CertificateAvailableEvent,
-    CertificateRemovedEvent,
+from charmlibs.interfaces.certificate_transfer import (
+    CertificatesAvailableEvent,
+    CertificatesRemovedEvent,
     CertificateTransferRequires,
 )
 from charms.glauth_k8s.v0.ldap import (
@@ -48,10 +46,10 @@ class LDAPEvents(ops.Object):
         self.framework.observe(self.ldap_requirer.on.ldap_ready, self._on_ldap_ready)
         self.framework.observe(self.ldap_requirer.on.ldap_unavailable, self._on_ldap_unavailable)
         self.framework.observe(
-            self.ldap_ca_transfer.on.certificate_available, self._on_ldap_ca_available
+            self.ldap_ca_transfer.on.certificate_set_updated, self._on_ldap_ca_available
         )
         self.framework.observe(
-            self.ldap_ca_transfer.on.certificate_removed, self._on_ldap_ca_removed
+            self.ldap_ca_transfer.on.certificates_removed, self._on_ldap_ca_removed
         )
         self.framework.observe(self.charm.on.config_changed, self._on_config_changed)
         self.framework.observe(self.charm.on.secret_changed, self._on_secret_changed)
@@ -59,6 +57,7 @@ class LDAPEvents(ops.Object):
         self.framework.observe(
             self.charm.on[PEER_RELATION].relation_changed, self._on_peer_relation_changed
         )
+        self.framework.observe(self.charm.on.update_status, self._on_update_status)
 
     def _on_ldap_ready(self, event: LdapReadyEvent) -> None:
         """Handle the setup of the LDAP relation."""
@@ -105,16 +104,26 @@ class LDAPEvents(ops.Object):
             event.defer()
             return
 
-    def _on_ldap_ca_available(self, event: CertificateAvailableEvent) -> None:
+    def _on_ldap_ca_available(self, event: CertificatesAvailableEvent) -> None:
         """Handle the CA certificate available event for LDAP."""
         if self.charm.state.cluster.is_restore_in_progress:
             event.defer()
             return
 
+        if not (
+            ca_certs := self.ldap_ca_transfer.get_all_certificates(
+                relation_id=event.relation_id  # pyright: ignore[reportArgumentType]
+            )
+        ):
+            logger.warning("No CA certificates published yet by the LDAP CA provider")
+            return
+
         try:
             self.charm.workload.make_dir(self.charm.workload.tls_dir, exist_ok=True)
             self.charm.workload.write_file(
-                content=event.ca, path=self.charm.workload.tls_paths.ldap_ca
+                # sorted so a re-delivered event rewrites byte-identical content
+                content="\n".join(sorted(ca_certs)),
+                path=self.charm.workload.tls_paths.ldap_ca,
             )
         except ValkeyWorkloadCommandError as e:
             logger.error("Error storing CA certificate for LDAP provider: %s", e)
@@ -136,7 +145,7 @@ class LDAPEvents(ops.Object):
             event.defer()
             return
 
-    def _on_ldap_ca_removed(self, event: CertificateRemovedEvent) -> None:
+    def _on_ldap_ca_removed(self, event: CertificatesRemovedEvent) -> None:
         """Handle the CA certificate removed event for LDAP."""
         if self.charm.state.cluster.is_restore_in_progress:
             event.defer()
@@ -320,7 +329,8 @@ class LDAPEvents(ops.Object):
     def _on_update_status(self, _: ops.UpdateStatusEvent) -> None:
         """Handle update status for LDAP."""
         if (
-            not self.charm.state.unit_server.is_ldap_enabled
+            not self.charm.state.unit_server.is_started
+            or not self.charm.state.unit_server.is_ldap_enabled
             or not self.charm.state.is_ldap_valid
             or self.charm.state.cluster.is_restore_in_progress
         ):

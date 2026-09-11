@@ -1,0 +1,30 @@
+{
+  "base_dn": "dc=ldap,dc=goauthentik,dc=io",
+  "groups": ["superheroes", "normies", "others"],
+  "users": [
+    {
+      "username": "johndoe",
+      "email": "john@authentik.test",
+      "password": "dogood",
+      "groups": ["superheroes"]
+    },
+    {
+      "username": "janedoe",
+      "email": "jane@authentik.test",
+      "password": "dogood",
+      "groups": ["normies"]
+    },
+    {
+      "username": "jimmydoe",
+      "email": "jimmy@authentik.test",
+      "password": "dogood",
+      "groups": ["normies"]
+    },
+    {
+      "username": "jennydoe",
+      "email": "jenny@authentik.test",
+      "password": "dogood",
+      "groups": ["others"]
+    }
+  ]
+}

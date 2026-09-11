@@ -134,11 +134,23 @@ prepare: |
     # but it adopts an already-clustered node, so bootstrap here first with a safe CIDR.
     POD_CIDR="10.42.0.0/16"
 
+    # Traefik fronts the LDAP tests and stays blocked until its Service gets an address, so the
+    # cluster needs a LoadBalancer provider. The range matches the metallb one the microk8s
+    # fallback in tests/integration/conftest.py enables, so both environments hand out the same
+    # addresses. Announced over L2 on every interface, which is what a single-node cluster needs.
+    LB_RANGE="10.64.140.43-10.64.140.49"
+
     # Fail loudly rather than re-introducing the flake if this ever collides again
     NODE_IP="$(ip -4 route get 1.1.1.1 | awk '{for (i = 1; i <= NF; i++) if ($i == "src") {print $(i + 1); exit}}')"
     if [[ ${NODE_IP%.*.*} == "${POD_CIDR%%.0.0/*}" ]]
     then
       echo "pod CIDR $POD_CIDR contains this runner's own address $NODE_IP; pick another" >&2
+      exit 1
+    fi
+    LB_RANGE_START="${LB_RANGE%%-*}"
+    if [[ ${NODE_IP%.*} == "${LB_RANGE_START%.*}" ]]
+    then
+      echo "load-balancer range $LB_RANGE contains this runner's own address $NODE_IP; pick another" >&2
       exit 1
     fi
 
@@ -168,6 +180,10 @@ prepare: |
         '  local-storage: {enabled: true}' \
         '  gateway: {enabled: true}' \
         '  metrics-server: {enabled: true}' \
+        '  load-balancer:' \
+        '    enabled: true' \
+        "    cidrs: [$LB_RANGE]" \
+        '    l2-mode: true' \
         "pod-cidr: $POD_CIDR" \
         > /tmp/k8s-bootstrap-config.yaml
       k8s bootstrap --timeout 5m --file /tmp/k8s-bootstrap-config.yaml
