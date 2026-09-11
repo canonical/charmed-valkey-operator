@@ -101,7 +101,9 @@ def test_build_and_deploy(
 
     juju.wait(
         lambda status: are_agents_idle(status, APP_NAME, idle_period=30, unit_count=NUM_UNITS),
-        timeout=600,
+        # the machine is very busy and under load with the entire stack of LDAP deployed
+        # allow more time to settle than usual
+        timeout=720,
     )
 
     # Named apps only: on K8s this is the Valkey model too, where Data Integrator sits blocked
