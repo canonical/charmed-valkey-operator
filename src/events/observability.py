@@ -7,11 +7,13 @@ import logging
 from typing import TYPE_CHECKING
 
 import ops
+from charms.grafana_agent.v0.cos_agent import COSAgentProvider
 from charms.grafana_k8s.v0.grafana_dashboard import GrafanaDashboardProvider
 from charms.loki_k8s.v1.loki_push_api import LogForwarder
 from charms.prometheus_k8s.v0.prometheus_scrape import MetricsEndpointProvider
 
 from literals import (
+    COS_AGENT_RELATION,
     DASHBOARDS_DIR,
     GRAFANA_DASHBOARD_RELATION,
     LOGGING_RELATION,
@@ -51,4 +53,14 @@ class ObservabilityEvents(ops.Object):
                 self.charm,
                 relation_name=LOGGING_RELATION,
                 alert_rules_path=LOGS_RULES_DIR,
+            )
+        else:
+            self.cos_agent = COSAgentProvider(
+                self.charm,
+                relation_name=COS_AGENT_RELATION,
+                metrics_endpoints=[{"path": "/metrics", "port": METRICS_PORT}],
+                metrics_rules_dir=METRICS_RULES_DIR,
+                logs_rules_dir=LOGS_RULES_DIR,
+                dashboard_dirs=[DASHBOARDS_DIR],
+                refresh_events=[self.charm.on.update_status, self.charm.on.config_changed],
             )
