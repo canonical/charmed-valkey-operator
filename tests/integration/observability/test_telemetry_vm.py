@@ -235,12 +235,21 @@ def _setup_cos_lite_k8s(juju_k8s: jubilant.Juju, k8s_model_name: str) -> None:
             "offer",
             f"{k8s_model_name}.{PROMETHEUS_APP}:receive-remote-write",
             "prometheus-remote-write",
+            include_model=False,
         )
     if "loki-logging" not in existing_offers:
-        juju_k8s.cli("offer", f"{k8s_model_name}.{LOKI_APP}:logging", "loki-logging")
+        juju_k8s.cli(
+            "offer",
+            f"{k8s_model_name}.{LOKI_APP}:logging",
+            "loki-logging",
+            include_model=False,
+        )
     if "grafana-dashboard" not in existing_offers:
         juju_k8s.cli(
-            "offer", f"{k8s_model_name}.{GRAFANA_APP}:grafana-dashboard", "grafana-dashboard"
+            "offer",
+            f"{k8s_model_name}.{GRAFANA_APP}:grafana-dashboard",
+            "grafana-dashboard",
+            include_model=False,
         )
 
 

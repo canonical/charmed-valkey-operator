@@ -103,7 +103,21 @@ def get_or_create_k8s_model(juju: jubilant.Juju, model_name: str = "cos-lite") -
             j_k8s.wait_timeout = 1000
             return j_k8s
 
-    raw_clouds = juju.cli("clouds", "--format", "json", include_model=False)
+    controller_name = None
+    try:
+        whoami = json.loads(juju.cli("whoami", "--format", "json", include_model=False))
+        controller_name = whoami.get("controller")
+    except Exception:
+        show_ctrl = json.loads(
+            juju.cli("show-controller", "--format", "json", include_model=False)
+        )
+        controller_name = next(iter(show_ctrl.keys()), None)
+
+    clouds_cmd = ["clouds", "--format", "json"]
+    if controller_name:
+        clouds_cmd.extend(["-c", controller_name])
+
+    raw_clouds = juju.cli(*clouds_cmd, include_model=False)
     clouds_dict = json.loads(raw_clouds)
     k8s_cloud_name = None
     for c_name, c_info in clouds_dict.items():
@@ -112,8 +126,11 @@ def get_or_create_k8s_model(juju: jubilant.Juju, model_name: str = "cos-lite") -
             break
 
     if not k8s_cloud_name:
+        add_k8s_args = ["add-k8s", "k8s-cloud"]
+        if controller_name:
+            add_k8s_args.extend(["-c", controller_name])
         try:
-            juju.cli("add-k8s", "k8s-cloud", "--client", include_model=False)
+            juju.cli(*add_k8s_args, include_model=False)
             k8s_cloud_name = "k8s-cloud"
         except Exception:
             k8s_cloud_name = "k8s"
